@@ -1,0 +1,37 @@
+{# 模板管理 — 列表片段（供增删改后 HTMX 局部刷新 #tpl-mgr-list） #}
+{% if templates %}
+<div style="display:flex;flex-direction:column;gap:8px;">
+    {% for t in templates %}
+    <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--color-bg);border:1px solid var(--color-border);border-radius:var(--radius-sm);">
+        <div style="flex:1;min-width:0;">
+            <div style="font-weight:600;font-size:0.9rem;color:var(--color-text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ t.name }}</div>
+            <div style="font-size:0.75rem;color:var(--color-text-tertiary);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+                {% set parts = [] %}
+                {% if t.data.project_name %}{% set _ = parts.append(t.data.project_name) %}{% endif %}
+                {% if t.data.source %}{% set _ = parts.append(t.data.source) %}{% endif %}
+                {% if t.data.commission_type %}{% set _ = parts.append(t.data.commission_type) %}{% endif %}
+                {{ parts | join(' · ') if parts else '（无字段快照）' }}
+            </div>
+        </div>
+        <div style="display:flex;gap:6px;flex-shrink:0;">
+            <button type="button" class="btn btn-primary btn-sm"
+                    onclick="openCenterModal('/orders/new?modal=1&template={{ t.id }}', '新建订单')">用此模板新建</button>
+            <button type="button" class="btn btn-ghost btn-sm"
+                    hx-get="/orders/templates/{{ t.id }}/edit"
+                    hx-target="#tpl-mgr-list"
+                    hx-swap="innerHTML">编辑</button>
+            <button type="button" class="btn btn-ghost btn-sm" style="color:var(--color-danger);"
+                    hx-post="/orders/templates/{{ t.id }}/delete"
+                    hx-target="#tpl-mgr-list"
+                    hx-swap="innerHTML"
+                    hx-confirm="删除模板「{{ t.name }}」？">删除</button>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<div class="empty-state" style="padding:32px 16px;">
+    <div class="empty-state-text">还没有模板</div>
+    <div style="font-size:0.8rem;color:var(--color-text-tertiary);margin-top:6px;">点击下方「新建模板」即可创建。</div>
+</div>
+{% endif %}

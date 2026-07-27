@@ -1,0 +1,5 @@
+flask>=3.0
+pydantic>=2.0
+flask-cors
+Pillow>=10.0
+pystray>=0.19

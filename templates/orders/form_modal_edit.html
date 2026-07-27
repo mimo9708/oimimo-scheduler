@@ -1,0 +1,208 @@
+{# 模态框中的订单编辑表单 — 不继承 base.html #}
+<form method="POST" action="/orders/{{ order.id }}/edit" class="form-container" style="max-width:100%;"
+      hx-post="/orders/{{ order.id }}/edit"
+      hx-target="#center-modal-body"
+      hx-swap="innerHTML"
+      id="order-form-modal-edit">
+
+    <input type="hidden" name="modal" value="1">
+
+    <!-- 原订单链接 -->
+    <div class="form-group">
+        <label>原订单链接</label>
+        <input type="url" name="platform_url" value="{{ order.platform_url or '' }}"
+               placeholder="https://...">
+        {% if order.platform_url %}
+        <a href="{{ order.platform_url }}" target="_blank" style="font-size:0.75rem;color:var(--color-link);">打开原页面 ↗</a>
+        {% endif %}
+    </div>
+
+    <!-- 客户 -->
+    <div class="form-group">
+        <label>
+            客户
+            <button type="button" class="btn btn-ghost btn-sm" style="font-size:0.72rem;margin-left:6px;color:var(--color-primary);"
+                    onclick="var f=document.getElementById('quick-cust-modal-edit');f.classList.toggle('hidden');if(!f.classList.contains('hidden'))document.getElementById('quick-name-modal-edit').focus();">
+                + 新建
+            </button>
+        </label>
+        <div id="customer-select-wrapper-modal-edit">
+            <select name="customer_id">
+                <option value="">— 选择客户 —</option>
+                {% for c in customers %}
+                <option value="{{ c.id }}" {% if order.customer_id == c.id %}selected{% endif %}>{{ c.name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div id="quick-cust-modal-edit" class="hidden" style="margin-top:6px;padding:10px;background:var(--color-bg);border-radius:var(--radius-sm);border:1px solid var(--color-border);">
+            <div style="display:flex;gap:6px;">
+                <input type="text" name="quick_name" id="quick-name-modal-edit" placeholder="客户名称 *"
+                       style="flex:1;padding:6px 8px;border:1px solid var(--color-border);border-radius:var(--radius-sm);font-size:0.82rem;">
+                <button type="button" class="btn btn-primary btn-sm"
+                        hx-post="/api/customers/quick"
+                        hx-target="#customer-select-wrapper-modal-edit"
+                        hx-include="#quick-name-modal-edit"
+                        hx-swap="innerHTML"
+                        hx-on:htmx:after-request="document.getElementById('quick-cust-modal-edit').classList.add('hidden')">
+                    创建
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 项目名称 -->
+    <div class="form-group">
+        <label>项目名称 *</label>
+        <input type="text" name="project_name" required value="{{ order.project_name }}">
+    </div>
+
+    <!-- 来源 + 阶段 -->
+    <div class="form-row">
+        <div class="form-group">
+            <label>来源</label>
+            <input type="text" name="source" list="modal-edit-source-list" value="{{ order.source }}" placeholder="输入或选择..." autocomplete="off">
+            <datalist id="modal-edit-source-list">{% for s in existing_sources %}<option value="{{ s }}">{% endfor %}</datalist>
+        </div>
+        <div class="form-group">
+            <label>当前阶段</label>
+            <select name="current_stage">
+                {% for s in STAGE_CHOICES %}
+                <option value="{{ s }}" {% if order.current_stage == s %}selected{% endif %}>{{ s }}</option>
+                {% endfor %}
+            </select>
+        </div>
+    </div>
+
+    <!-- DDL(自动) + 收款 -->
+    <div class="form-row">
+        <div class="form-group">
+            <label>DDL状态</label>
+            <div style="padding:8px 12px;background:var(--color-bg);border-radius:var(--radius-sm);font-size:0.85rem;color:var(--color-text-secondary);">
+                ⚡ {{ order.ddl_status }}
+            </div>
+        </div>
+        <div class="form-group">
+            <label>收款状态</label>
+            <select name="payment_status">
+                {% for s in PAYMENT_CHOICES %}
+                <option value="{{ s }}" {% if order.payment_status == s %}selected{% endif %}>{{ s }}</option>
+                {% endfor %}
+            </select>
+        </div>
+    </div>
+
+    <!-- 财务 -->
+    {% set is_plat = order.source in PLATFORM_SOURCES %}
+    <div id="modal-edit-finance-platform" style="{{ 'display:none;' if not is_plat else '' }}">
+        <div class="form-row">
+            <div class="form-group">
+                <label>平台收入 (¥)</label>
+                <input type="number" name="deposit" step="0.01" min="0" value="{{ order.income }}" oninput="calcModalEditActual()" id="modal-edit-deposit-plat">
+            </div>
+            <div class="form-group">
+                <label>手续费 (%)</label>
+                <input type="number" name="platform_fee_pct" step="0.1" min="0" max="100"
+                       value="{{ '%.1f'|format(order.platform_fee_pct) if order.platform_fee_pct else '5' }}" oninput="calcModalEditActual()" id="modal-edit-pct">
+            </div>
+        </div>
+        <div style="margin-top:var(--space-sm);padding:10px;background:var(--color-bg);border-radius:var(--radius-sm);font-size:0.85rem;display:flex;gap:var(--space-lg);">
+            <span>收入: <strong id="modal-edit-income">¥0</strong></span>
+            <span>手续费: <strong style="color:var(--color-danger);">-¥<span id="modal-edit-fee">0</span></strong></span>
+            <span>实收: <strong style="color:var(--color-success);">¥<span id="modal-edit-actual">0</span></strong></span>
+        </div>
+    </div>
+    <div id="modal-edit-finance-direct" style="{{ '' if not is_plat else 'display:none;' }}">
+        <div class="form-row">
+            <div class="form-group">
+                <label>定金 (¥)</label>
+                <input type="number" name="deposit" step="0.01" min="0" value="{{ order.deposit }}" oninput="calcModalEditActual()" id="modal-edit-deposit-direct">
+            </div>
+            <div class="form-group">
+                <label>尾款 (¥)</label>
+                <input type="number" name="balance" step="0.01" min="0" value="{{ order.balance }}" oninput="calcModalEditActual()" id="modal-edit-balance-direct">
+            </div>
+        </div>
+        <div style="margin-top:var(--space-sm);padding:10px;background:var(--color-bg);border-radius:var(--radius-sm);font-size:0.85rem;display:flex;gap:var(--space-lg);">
+            <span>定金+尾款: <strong id="modal-edit-total">¥0</strong></span>
+            <span>实收: <strong style="color:var(--color-success);">¥<span id="modal-edit-actual2">0</span></strong></span>
+        </div>
+    </div>
+
+    <!-- 品类 + 日期 -->
+    <div class="form-row" style="margin-top:var(--space-md);">
+        <div class="form-group">
+            <label>稿件类别</label>
+            <input type="text" name="commission_type" list="modal-edit-type-list" value="{{ order.commission_type or '' }}" placeholder="输入或选择..." autocomplete="off">
+            <datalist id="modal-edit-type-list">{% for t in existing_types %}<option value="{{ t }}">{% endfor %}</datalist>
+        </div>
+        <div class="form-group date-field">
+            <label>排单开始</label>
+            <input type="{{ 'datetime-local' if order.scheduled_start and 'T' in order.scheduled_start else 'date' }}" name="scheduled_start" value="{{ order.scheduled_start or '' }}">
+        </div>
+    </div>
+
+    <div class="form-row">
+        <div class="form-group date-field">
+            <label>排单截止</label>
+            <input type="{{ 'datetime-local' if order.scheduled_end and 'T' in order.scheduled_end else 'date' }}" name="scheduled_end" value="{{ order.scheduled_end or '' }}">
+        </div>
+        <div class="form-group">
+            <label>备注</label>
+            <textarea name="notes" rows="2">{{ order.notes or '' }}</textarea>
+        </div>
+    </div>
+
+    {% if order.is_repeat %}
+    <div style="padding:6px 10px;background:var(--color-bg);border-radius:var(--radius-sm);font-size:0.78rem;color:var(--color-text-secondary);margin-top:var(--space-sm);">
+        🔄 复购用户 · 第 {{ order.repeat_count }} 次下单
+    </div>
+    {% endif %}
+
+    <!-- 作品图片（多图，仅编辑态显示，P15d） -->
+    <div class="form-group" style="margin-top:var(--space-md);">
+        <label>作品图片</label>
+        <div id="edit-image-list" class="edit-image-list">
+            {% for im in images %}
+            <div class="edit-image-thumb" data-image-id="{{ im.id }}">
+                <img src="{{ im.image_url }}" alt="作品图" loading="lazy">
+                <button type="button" class="edit-image-del" onclick="removeImage({{ order.id }}, {{ im.id }})" title="移除">&times;</button>
+            </div>
+            {% endfor %}
+        </div>
+        <div class="image-upload-zone" id="image-upload-zone" data-order-id="{{ order.id }}" style="margin-top:var(--space-sm);">
+            <div style="font-size:0.85rem;color:var(--color-text-secondary);">📎 点击、拖拽或粘贴图片到此处上传（支持多图）</div>
+            <div style="font-size:0.72rem;color:var(--color-text-tertiary);margin-top:4px;">PNG/JPG/GIF/WebP，最大 10MB，支持 Ctrl+V 粘贴</div>
+            <input type="file" id="image-upload-input" accept="image/*" multiple style="display:none;">
+        </div>
+    </div>
+
+    {# P16g：底部操作栏已移至表单顶部，此处不再重复 #}
+</form>
+
+<script src="/static/datetime-toggle.js"></script>
+<script>
+// 初始化双模式时间选择器（setTimeout 确保 HTMX 注入后 DOM 就绪）
+setTimeout(function() { DateTimeToggle.initAll('#center-modal-body .date-field input[type="date"], #center-modal-body .date-field input[type="datetime-local"]'); }, 0);
+
+// 将操作按钮注入模态框标题栏（B3），确保滑动时始终可见
+(function() {
+    var container = document.getElementById('center-modal-actions');
+    if (container) {
+        container.innerHTML = '<button type="submit" form="order-form-modal-edit" class="btn btn-primary">💾 保存</button>'
+            + '<button type="button" class="btn btn-secondary" onclick="closeCenterModal()">取消</button>'
+            + '<a href="/orders/{{ order.id }}" class="btn btn-ghost btn-sm" target="_blank" style="margin-left:8px;">打开完整页面 ↗</a>';
+    }
+})();
+
+var MODAL_EDIT_PLATFORM = {{ PLATFORM_SOURCES|list|tojson }};
+function isModalEditPlat() { var s = document.querySelector('[name="source"]').value||''; return MODAL_EDIT_PLATFORM.indexOf(s)!==-1; }
+function toggleModalEditFinance() { var p=isModalEditPlat(); document.getElementById('modal-edit-finance-platform').style.display=p?'':'none'; document.getElementById('modal-edit-finance-direct').style.display=p?'none':''; calcModalEditActual(); }
+function calcModalEditActual() {
+    if(isModalEditPlat()){ var income=parseFloat(document.getElementById('modal-edit-deposit-plat').value)||0; var pct=parseFloat(document.getElementById('modal-edit-pct').value)||0; var fee=Math.round(income*pct)/100; document.getElementById('modal-edit-income').textContent='¥'+income.toFixed(2); document.getElementById('modal-edit-fee').textContent=fee.toFixed(2); document.getElementById('modal-edit-actual').textContent=(income-fee).toFixed(2); }
+    else{ var d=parseFloat(document.getElementById('modal-edit-deposit-direct').value)||0; var b=parseFloat(document.getElementById('modal-edit-balance-direct').value)||0; document.getElementById('modal-edit-total').textContent='¥'+(d+b).toFixed(2); document.getElementById('modal-edit-actual2').textContent=(d+b).toFixed(2); }
+}
+document.querySelector('[name="source"]').addEventListener('input',toggleModalEditFinance);
+document.querySelector('[name="source"]').addEventListener('change',toggleModalEditFinance);
+calcModalEditActual();
+if (typeof initImageUpload === 'function') initImageUpload();   // HTMX 注入后绑定多图上传区
+</script>

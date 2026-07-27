@@ -1,0 +1,191 @@
+{% extends "base.html" %}
+{% block title %}{{ '新建订单' if is_new else '编辑订单 — ' + order.project_name }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h1 class="page-title">{{ '新建订单' if is_new else '编辑订单' }}</h1>
+        {% if not is_new %}<p class="page-subtitle">{{ order.project_name }}</p>{% endif %}
+    </div>
+</div>
+
+<form method="POST" action="{{ '/orders' if is_new else '/orders/' ~ order.id ~ '/edit' }}" id="order-form">
+
+{# P16g：操作栏置顶，无需滚动即可创建/保存/取消/归档；sticky 保证滚动时常驻 #}
+<div class="form-actions" style="margin-bottom:var(--space-md);position:sticky;top:0;z-index:20;background:var(--color-bg);padding:var(--space-sm) 0;">
+    <button type="submit" class="btn btn-primary">{{ '创建订单' if is_new else '保存修改' }}</button>
+    <a href="{{ '/' if is_new else '/orders/' ~ order.id|string }}" class="btn btn-secondary">取消</a>
+    {% if not is_new %}
+    {# P16f：归档按钮从查看页迁移到编辑页，沿用 P15b archiveOrder 确认弹窗流程 #}
+    <button type="button" class="btn btn-secondary" style="margin-left:auto;"
+            onclick="archiveOrder({{ order.id }}, {{ 'true' if order.is_archived else 'false' }})">{{ '取消归档' if order.is_archived else '归档' }}</button>
+    {% endif %}
+</div>
+
+<div class="card" style="margin-bottom:var(--space-md);">
+    <div class="card-body" style="padding:0;">
+        <div style="display:grid;grid-template-columns:1fr 1fr;">
+
+            <!-- ═══ 左栏：基本信息 + 进度 ═══ -->
+            <div style="padding:var(--space-md);border-right:1px solid var(--color-border);">
+                <div class="section-label">基本信息</div>
+
+                <div class="form-group">
+                    <label for="platform_url">原订单链接</label>
+                    <input type="url" name="platform_url" id="platform_url" placeholder="https://..."
+                           value="{{ order.platform_url if order else '' }}">
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="customer_id">客户
+                            <button type="button" class="btn btn-ghost btn-sm" style="font-size:0.72rem;margin-left:4px;color:var(--color-link);"
+                                    onclick="document.getElementById('quick-customer-form').classList.toggle('hidden')">+ 新建</button>
+                        </label>
+                        <div id="customer-select-wrapper">{% include "partials/customer_select.html" %}</div>
+                        <div id="quick-customer-form" class="hidden" style="margin-top:6px;padding:10px;background:var(--color-bg);border-radius:var(--radius-sm);border:1px solid var(--color-border);">
+                            <input type="text" name="quick_name" id="quick_name" placeholder="客户名称" style="width:100%;padding:6px 8px;border:1px solid var(--color-border);border-radius:3px;font-size:0.82rem;margin-bottom:4px;">
+                            <button type="button" class="btn btn-primary btn-sm" hx-post="/api/customers/quick" hx-target="#customer-select-wrapper" hx-include="#quick_name" hx-swap="innerHTML" hx-on:htmx:after-request="this.closest('#quick-customer-form').classList.add('hidden');document.getElementById('quick_name').value=''">创建</button>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="project_name">项目名称 *</label>
+                        <input type="text" name="project_name" id="project_name" required placeholder="如：罗马大浴场双人"
+                               value="{{ order.project_name if order else '' }}">
+                    </div>
+                </div>
+
+                <div class="form-row-3">
+                    <div class="form-group"><label for="source">来源</label>
+                        <input type="text" name="source" id="source" list="source-list" value="{{ order.source if order else '米画师' }}" autocomplete="off">
+                        <datalist id="source-list">{% for s in existing_sources %}<option value="{{ s }}">{% endfor %}</datalist>
+                    </div>
+                    <div class="form-group"><label for="commission_type">类别</label>
+                        <input type="text" name="commission_type" id="commission_type" list="type-list" value="{{ order.commission_type if order else '' }}" autocomplete="off">
+                        <datalist id="type-list">{% for t in existing_types %}<option value="{{ t }}">{% endfor %}</datalist>
+                    </div>
+                    <div class="form-group"><label for="is_commercial">用途</label>
+                        <select name="is_commercial" id="is_commercial"><option value="0" {% if order and not order.is_commercial %}selected{% endif %}>私用</option><option value="1" {% if order and order.is_commercial %}selected{% endif %}>商用</option></select>
+                    </div>
+                </div>
+
+                <div class="section-label" style="margin-top:var(--space-md);">进度</div>
+                <div class="form-row-3">
+                    <div class="form-group"><label for="current_stage">阶段</label>
+                        <select name="current_stage" id="current_stage">{% for s in STAGE_CHOICES %}<option value="{{ s }}" {% if order and order.current_stage == s %}selected{% elif not order and s == '待开始' %}selected{% endif %}>{{ s }}</option>{% endfor %}</select>
+                    </div>
+                    <div class="form-group"><label>DDL</label>
+                        <div style="padding:8px 10px;background:var(--color-bg);border-radius:var(--radius-sm);font-size:0.82rem;color:var(--color-text-secondary);">自动 &middot; {{ order.ddl_status if order else '正常' }}</div>
+                    </div>
+                    <div class="form-group"><label for="payment_status">收款</label>
+                        <select name="payment_status" id="payment_status">{% for s in PAYMENT_CHOICES %}<option value="{{ s }}" {% if order and order.payment_status == s %}selected{% elif not order and s == '未收款' %}selected{% endif %}>{{ s }}</option>{% endfor %}</select>
+                    </div>
+                </div>
+
+                <div class="form-group" style="margin-top:var(--space-sm);">
+                    <label for="notes">备注</label>
+                    <textarea name="notes" id="notes" rows="2" placeholder="如：客户要求暖色调、需加急等">{{ order.notes if order else '' }}</textarea>
+                </div>
+            </div>
+
+            <!-- ═══ 右栏：财务 + 排期 ═══ -->
+            <div style="padding:var(--space-md);">
+                <div class="section-label">财务</div>
+                {% set is_plat = (order.source if order else '米画师') in PLATFORM_SOURCES %}
+                <div id="finance-platform" style="{{ 'display:none;' if not is_plat else '' }}">
+                    <div class="form-row">
+                        <div class="form-group"><label>平台收入 (¥)</label>
+                            <input type="number" name="deposit" id="deposit-plat" step="0.01" min="0" value="{{ order.income if order else '0' }}" oninput="calcActualReceived()">
+                        </div>
+                        <div class="form-group"><label>手续费 (%)</label>
+                            <input type="number" name="platform_fee_pct" id="platform_fee_pct" step="0.1" min="0" max="100" value="{{ '%.1f'|format(order.platform_fee_pct) if order and order.platform_fee_pct else '5' }}" oninput="calcActualReceived()">
+                        </div>
+                    </div>
+                    <div style="margin-top:var(--space-sm);padding:10px;background:var(--color-bg);border-radius:var(--radius-sm);display:grid;grid-template-columns:repeat(3,1fr);gap:8px;font-size:0.85rem;">
+                        <div>收入<br><strong>¥<span id="preview-income">0</span></strong></div>
+                        <div>手续费<br><strong style="color:var(--color-danger);">-¥<span id="preview-fee">0</span></strong></div>
+                        <div>实收<br><strong style="color:var(--color-success);">¥<span id="preview-actual">0</span></strong></div>
+                    </div>
+                </div>
+                <div id="finance-direct" style="{{ '' if not is_plat else 'display:none;' }}">
+                    <div class="form-row">
+                        <div class="form-group"><label>定金 (¥)</label>
+                            <input type="number" name="deposit" id="deposit-direct" step="0.01" min="0" value="{{ order.deposit if order else '0' }}" oninput="calcActualReceived()">
+                        </div>
+                        <div class="form-group"><label>尾款 (¥)</label>
+                            <input type="number" name="balance" id="balance-direct" step="0.01" min="0" value="{{ order.balance if order else '0' }}" oninput="calcActualReceived()">
+                        </div>
+                    </div>
+                    <div style="margin-top:var(--space-sm);padding:10px;background:var(--color-bg);border-radius:var(--radius-sm);display:grid;grid-template-columns:repeat(2,1fr);gap:8px;font-size:0.85rem;">
+                        <div>合计<br><strong>¥<span id="preview-total">0</span></strong></div>
+                        <div>实收<br><strong style="color:var(--color-success);">¥<span id="preview-actual2">0</span></strong></div>
+                    </div>
+                </div>
+
+                <div class="section-label" style="margin-top:var(--space-md);">排期</div>
+                <div class="form-group date-field"><label for="page_deadline">页面截稿日 <span style="font-weight:normal;color:var(--color-text-tertiary);font-size:0.7rem;">参考</span></label>
+                    <input type="{{ 'datetime-local' if order and order.page_deadline and 'T' in order.page_deadline else 'date' }}" name="page_deadline" id="page_deadline" value="{{ order.page_deadline if order else '' }}">
+                </div>
+                <div class="form-row">
+                    <div class="form-group date-field"><label for="scheduled_start">排单开始</label>
+                        <input type="{{ 'datetime-local' if order and order.scheduled_start and 'T' in order.scheduled_start else 'date' }}" name="scheduled_start" id="scheduled_start" value="{{ order.scheduled_start if order else '' }}">
+                    </div>
+                    <div class="form-group date-field"><label for="scheduled_end">排单截止</label>
+                        <input type="{{ 'datetime-local' if order and order.scheduled_end and 'T' in order.scheduled_end else 'date' }}" name="scheduled_end" id="scheduled_end" value="{{ order.scheduled_end if order else '' }}">
+                    </div>
+                </div>
+
+                {% if order and order.is_repeat %}
+                <div style="margin-top:var(--space-md);padding:8px 12px;background:var(--color-bg);border-radius:var(--radius-sm);font-size:0.82rem;color:var(--color-text-secondary);">复购 &middot; 第 {{ order.repeat_count }} 次</div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+{% if not is_new %}
+<!-- 作品图片（多图，仅编辑模式显示，P15e） -->
+<div class="card" style="margin-bottom:var(--space-md);">
+    <div class="card-header">作品图片</div>
+    <div class="card-body">
+        <div id="edit-image-list" class="edit-image-list">
+            {% for im in images %}
+            <div class="edit-image-thumb" data-image-id="{{ im.id }}">
+                <img src="{{ im.image_url }}" alt="作品图" loading="lazy">
+                <button type="button" class="edit-image-del" onclick="removeImage({{ order.id }}, {{ im.id }})" title="移除">&times;</button>
+            </div>
+            {% endfor %}
+        </div>
+        <div class="image-upload-zone" id="image-upload-zone" data-order-id="{{ order.id }}" style="margin-top:var(--space-sm);">
+            <div style="font-size:0.88rem;color:var(--color-text-secondary);">📎 点击、拖拽或粘贴图片到此处上传（支持多图）</div>
+            <div style="font-size:0.75rem;color:var(--color-text-tertiary);margin-top:4px;">支持 PNG/JPG/GIF/WebP，最大 10MB，支持 Ctrl+V 粘贴</div>
+            <input type="file" id="image-upload-input" accept="image/*" multiple style="display:none;">
+        </div>
+    </div>
+</div>
+{% endif %}
+
+{# P16g：底部操作栏已移至表单顶部（sticky），此处不再重复 #}
+</form>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/datetime-toggle.js"></script>
+<script>
+var PLATFORM = {{ PLATFORM_SOURCES|list|tojson }};
+function isPlatform(){ var s=document.getElementById('source').value||''; return PLATFORM.indexOf(s)!==-1; }
+function toggleFinanceMode(){ var p=isPlatform(); document.getElementById('finance-platform').style.display=p?'':'none'; document.getElementById('finance-direct').style.display=p?'none':''; calcActualReceived(); }
+function calcActualReceived(){
+    if(isPlatform()){ var i=parseFloat(document.getElementById('deposit-plat').value)||0; var pct=parseFloat(document.getElementById('platform_fee_pct').value)||0; var f=Math.round(i*pct)/100; document.getElementById('preview-income').textContent=i.toFixed(2); document.getElementById('preview-fee').textContent=f.toFixed(2); document.getElementById('preview-actual').textContent=(i-f).toFixed(2); }
+    else{ var d=parseFloat(document.getElementById('deposit-direct').value)||0; var b=parseFloat(document.getElementById('balance-direct').value)||0; document.getElementById('preview-total').textContent=(d+b).toFixed(2); document.getElementById('preview-actual2').textContent=(d+b).toFixed(2); }
+}
+document.getElementById('source').addEventListener('input',toggleFinanceMode);
+document.getElementById('source').addEventListener('change',toggleFinanceMode);
+document.getElementById('deposit-direct').addEventListener('input',calcActualReceived);
+document.getElementById('balance-direct').addEventListener('input',calcActualReceived);
+document.getElementById('deposit-plat').addEventListener('input',calcActualReceived);
+document.addEventListener('DOMContentLoaded',calcActualReceived);
+// 初始化双模式时间选择器
+document.addEventListener('DOMContentLoaded', function() { DateTimeToggle.initAll('.date-field input[type="date"], .date-field input[type="datetime-local"]'); });
+</script>
+{% endblock %}

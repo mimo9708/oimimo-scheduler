@@ -1,0 +1,341 @@
+{% extends "base.html" %}
+{% block title %}排单列表 — oimimo scheduler{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h1 class="page-title">排单列表</h1>
+    </div>
+    <div style="display:flex;gap:var(--space-sm);">
+        <a href="/orders" class="btn btn-sm {{ 'btn-primary' if not filters.get('archived') else 'btn-secondary' }}">活跃</a>
+        <a href="/orders?archived=1" class="btn btn-sm {{ 'btn-primary' if filters.get('archived') else 'btn-secondary' }}">已归档</a>
+        <a href="#" onclick="openCenterModal();return false;" class="btn btn-primary btn-sm">+ 新建</a>
+        <a href="#" onclick="exportOrders();return false;" class="btn btn-secondary btn-sm">导出订单</a>
+        <a href="#" onclick="openExportFolder();return false;" class="btn btn-secondary btn-sm">导出文件夹</a>
+    </div>
+</div>
+
+<!-- 筛选栏 -->
+<div class="card" style="margin-bottom:var(--space-md);">
+    <div class="card-body">
+        <form class="filter-bar"
+              hx-get="/api/orders"
+              hx-target="#order-table-body"
+              hx-trigger="input delay:300ms, change delay:300ms"
+              hx-include="[name='archived']">
+            <input type="hidden" name="archived" value="{{ '1' if filters.get('archived') else '0' }}">
+            <!-- P13b G3：排序状态随 HTMX 筛选/分页传递 -->
+            <input type="hidden" name="sort" value="{{ filters.get('sort', '') }}">
+            <input type="hidden" name="dir" value="{{ filters.get('dir', '') }}">
+            <select name="stage">
+                <option value="">所有阶段</option>
+                {% for s in STAGE_CHOICES %}
+                <option value="{{ s }}" {% if filters.get('stage') == s %}selected{% endif %}>{{ s }}</option>
+                {% endfor %}
+            </select>
+            <select name="source">
+                <option value="">所有来源</option>
+                {% for s in SOURCE_CHOICES %}
+                <option value="{{ s }}" {% if filters.get('source') == s %}selected{% endif %}>{{ s }}</option>
+                {% endfor %}
+            </select>
+            <select name="status">
+                <option value="">所有状态</option>
+                {% for s in DDL_CHOICES %}
+                <option value="{{ s }}" {% if filters.get('status') == s %}selected{% endif %}>{{ s }}</option>
+                {% endfor %}
+            </select>
+            <!-- P16e：按订单结束时间范围筛选（起/止，任一端可空） -->
+            <span style="display:inline-flex;align-items:center;gap:4px;font-size:0.82rem;color:var(--color-text-secondary);">
+                结束
+                <input type="date" name="end_from" value="{{ filters.get('end_from', '') }}" title="结束时间≥" style="padding:2px 4px;">
+                –
+                <input type="date" name="end_to" value="{{ filters.get('end_to', '') }}" title="结束时间≤" style="padding:2px 4px;">
+            </span>
+            <!-- P13b G2：搜索框右置，去 emoji -->
+            <input type="search" name="search" placeholder="搜索项目/客户..."
+                   value="{{ filters.get('search', '') }}" style="margin-left:auto;">
+        </form>
+    </div>
+</div>
+
+<!-- 批量操作栏 — 多列平铺 -->
+<div id="batch-bar" class="batch-bar" style="display:none;">
+    <div style="display:flex;align-items:center;gap:var(--space-sm);padding:6px 0;">
+        <span style="font-size:0.85rem;font-weight:600;">已选 <span id="batch-count">0</span> 条</span>
+        <input type="hidden" id="batch-action" value="">
+        <button class="btn btn-primary btn-sm" onclick="doBatchAction()">执行</button>
+        <button class="btn btn-ghost btn-sm" onclick="clearSelection()">取消选择</button>
+    </div>
+    <div class="batch-groups">
+        <div class="batch-group">
+            <span class="batch-group-label">阶段</span>
+            <div class="batch-group-btns">
+                {% for s in STAGE_CHOICES %}
+                <button class="batch-btn" data-action="stage:{{ s }}" onclick="pickBatchAction(this)">{{ s }}</button>
+                {% endfor %}
+            </div>
+        </div>
+        <div class="batch-group">
+            <span class="batch-group-label">来源</span>
+            <div class="batch-group-btns">
+                {% for s in SOURCE_CHOICES %}
+                <button class="batch-btn" data-action="source:{{ s }}" onclick="pickBatchAction(this)">{{ s }}</button>
+                {% endfor %}
+            </div>
+        </div>
+        <div class="batch-group">
+            <span class="batch-group-label">收款</span>
+            <div class="batch-group-btns">
+                {% for s in PAYMENT_CHOICES %}
+                <button class="batch-btn" data-action="payment:{{ s }}" onclick="pickBatchAction(this)">{{ s }}</button>
+                {% endfor %}
+            </div>
+        </div>
+        <div class="batch-group">
+            <span class="batch-group-label">其他</span>
+            <div class="batch-group-btns">
+                <button class="batch-btn" data-action="recompute:1" onclick="pickBatchAction(this)">重新保存</button>
+                <button class="batch-btn" data-action="archive:1" onclick="pickBatchAction(this)">归档</button>
+                <button class="batch-btn" data-action="archive:0" onclick="pickBatchAction(this)">取消归档</button>
+                <button class="batch-btn batch-btn-danger" data-action="delete:1" onclick="pickBatchAction(this)">删除</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 订单表格 -->
+{# P13b G3：可排序表头宏 — 三态循环（默认 → 升序 → 降序 → 默认） #}
+{% macro sort_th(key, label) %}
+<th class="sortable-th{% if filters.get('sort') == key %} sorted-{{ filters.get('dir', 'asc') }}{% endif %}"
+    data-sort="{{ key }}" onclick="toggleSort('{{ key }}')" title="点击排序">{{ label }}<span class="sort-arrow">{% if filters.get('sort') == key %}{{ '↑' if filters.get('dir') == 'asc' else '↓' }}{% endif %}</span></th>
+{% endmacro %}
+<div class="card">
+    <div class="card-body" style="padding:0;">
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th style="width:36px;"><input type="checkbox" id="select-all" onclick="toggleAll(this)" title="全选"></th>
+                        {{ sort_th('id', 'ID') }}
+                        {{ sort_th('customer', '客户') }}
+                        {{ sort_th('project_name', '项目名称') }}
+                        {{ sort_th('source', '来源') }}
+                        {{ sort_th('commission_type', '类别') }}
+                        {{ sort_th('stage', '阶段') }}
+                        {{ sort_th('ddl', 'DDL') }}
+                        {{ sort_th('income', '收入') }}
+                        {{ sort_th('actual_received', '实收') }}
+                        {{ sort_th('payment', '收款') }}
+                        {{ sort_th('scheduled', '排期') }}
+                    </tr>
+                </thead>
+                <tbody id="order-table-body">
+                    {% include "partials/order_rows.html" %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- 分页 -->
+{% set total = pagination.get('total', orders|length) %}
+{% set page = pagination.get('page', 1) %}
+{% set per_page = pagination.get('per_page', 30) %}
+{% set total_pages = ((total - 1) // per_page + 1) if total > 0 else 1 %}
+{% if total_pages > 1 %}
+<div class="pagination-bar" style="display:flex;align-items:center;justify-content:center;gap:var(--space-sm);margin-top:var(--space-md);">
+    {% if page > 1 %}
+    <a href="?{{ request.query_string.decode()|replace('page=' ~ page, 'page=' ~ (page-1)) if 'page=' in (request.query_string.decode() or '') else (request.query_string.decode() + '&page=' ~ (page-1)) if request.query_string.decode() else 'page=' ~ (page-1) }}" class="btn btn-sm btn-secondary" onclick="return goPage({{ page - 1 }})">‹ 上一页</a>
+    {% endif %}
+    <span style="font-size:0.82rem;color:var(--color-text-secondary);">
+        {{ page }} / {{ total_pages }} 页（共 {{ total }} 条）
+    </span>
+    {% if page < total_pages %}
+    <a href="#" class="btn btn-sm btn-secondary" onclick="return goPage({{ page + 1 }})">下一页 ›</a>
+    {% endif %}
+    <span style="font-size:0.78rem;color:var(--color-text-tertiary);margin-left:var(--space-sm);">
+        每页 <select onchange="goPerPage(this.value)" style="padding:2px 4px;border:1px solid var(--color-border);border-radius:3px;font-size:0.78rem;">
+            {% for n in [15, 30, 50, 100] %}
+            <option value="{{ n }}" {% if per_page == n %}selected{% endif %}>{{ n }}</option>
+            {% endfor %}
+        </select> 条
+    </span>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+// ── 分页导航 ──
+function goPage(n) {
+    var url = new URL(window.location.href);
+    url.searchParams.set('page', n);
+    // P13b G3：分页保持排序状态
+    var s = document.querySelector('[name="sort"]');
+    var d = document.querySelector('[name="dir"]');
+    if (s && s.value) {
+        url.searchParams.set('sort', s.value);
+        url.searchParams.set('dir', d.value);
+    }
+    window.location.href = url.toString();
+    return false;
+}
+
+/* ── P13b G3：表头三态排序（默认 → 升序 → 降序 → 默认） ── */
+function toggleSort(key) {
+    var sortInput = document.querySelector('[name="sort"]');
+    var dirInput = document.querySelector('[name="dir"]');
+    if (!sortInput || !dirInput) return;
+    if (sortInput.value !== key) {
+        sortInput.value = key;
+        dirInput.value = 'asc';
+    } else if (dirInput.value === 'asc') {
+        dirInput.value = 'desc';
+    } else {
+        sortInput.value = '';
+        dirInput.value = '';
+    }
+    // 更新表头箭头
+    document.querySelectorAll('.sortable-th').forEach(function(th) {
+        var k = th.getAttribute('data-sort');
+        var arrow = th.querySelector('.sort-arrow');
+        th.classList.remove('sorted-asc', 'sorted-desc');
+        if (k && k === sortInput.value && sortInput.value) {
+            th.classList.add(dirInput.value === 'asc' ? 'sorted-asc' : 'sorted-desc');
+            if (arrow) arrow.textContent = dirInput.value === 'asc' ? '↑' : '↓';
+        } else if (arrow) {
+            arrow.textContent = '';
+        }
+    });
+    // 触发 HTMX 筛选刷新（复用表单 change 触发器）
+    document.querySelector('.filter-bar').dispatchEvent(new Event('change', { bubbles: true }));
+}
+function goPerPage(n) {
+    var url = new URL(window.location.href);
+    url.searchParams.set('per_page', n);
+    url.searchParams.set('page', 1);
+    window.location.href = url.toString();
+}
+
+(function() {
+    var selectedIds = new Set();
+
+    window.toggleAll = function(el) {
+        document.querySelectorAll('.order-checkbox').forEach(function(cb) { cb.checked = el.checked; });
+        updateSel();
+    };
+
+    window.toggleOne = function(cb, orderId) {
+        if (cb.checked) selectedIds.add(orderId);
+        else selectedIds.delete(orderId);
+        updateSel();
+    };
+
+    function updateSel() {
+        selectedIds.clear();
+        document.querySelectorAll('.order-checkbox:checked').forEach(function(cb) {
+            selectedIds.add(parseInt(cb.dataset.id));
+        });
+        var c = selectedIds.size;
+        document.getElementById('batch-count').textContent = c;
+        document.getElementById('batch-bar').style.display = c > 0 ? '' : 'none';
+        document.getElementById('select-all').checked = c > 0 && c === document.querySelectorAll('.order-checkbox').length;
+    }
+
+    window.clearSelection = function() {
+        document.querySelectorAll('.order-checkbox').forEach(function(cb) { cb.checked = false; });
+        document.getElementById('select-all').checked = false;
+        updateSel();
+        // 清除按钮选中
+        document.querySelectorAll('.batch-btn.active').forEach(function(b) { b.classList.remove('active'); });
+        document.getElementById('batch-action').value = '';
+    };
+
+    window.pickBatchAction = function(btn) {
+        // 如果已经选中，点击取消选中
+        if (btn.classList.contains('active')) {
+            btn.classList.remove('active');
+            document.getElementById('batch-action').value = '';
+            return;
+        }
+        // 取消同组其他按钮的选中状态
+        var group = btn.closest('.batch-group-btns');
+        if (group) {
+            group.querySelectorAll('.batch-btn').forEach(function(b) { b.classList.remove('active'); });
+        }
+        btn.classList.add('active');
+        document.getElementById('batch-action').value = btn.dataset.action;
+    };
+
+    window.doBatchAction = function() {
+        var actionVal = document.getElementById('batch-action').value;
+        if (!actionVal || selectedIds.size === 0) return;
+        var parts = actionVal.split(':');
+        var action = parts[0], value = parts.slice(1).join(':');
+        var activeBtn = document.querySelector('.batch-btn.active');
+        var label = activeBtn ? activeBtn.textContent : action;
+        var msg = '确定批量：' + label + '（' + selectedIds.size + ' 条）？';
+        if (!confirm(msg)) return;
+
+        var ids = Array.from(selectedIds);
+        var fd = new FormData();
+        fd.append('ids', ids.join(','));
+        fd.append('action', action);
+        fd.append('value', value);
+
+        var btn = document.querySelector('#batch-bar .btn-primary');
+        btn.textContent = '处理中...'; btn.disabled = true;
+
+        dirtyFetch('/orders/batch', { method: 'POST', body: fd })
+            .then(function(r) { return r.json(); })
+            .then(function(r) {
+                btn.textContent = '执行'; btn.disabled = false;
+                if (r.success) {
+                    showToast('已更新 ' + r.count + ' 条', 'success');
+                    refreshTable();
+                } else {
+                    showToast(r.error || '失败', 'error');
+                }
+            })
+            .catch(function() {
+                btn.textContent = '执行'; btn.disabled = false;
+                showToast('网络错误', 'error');
+            });
+    };
+
+    function refreshTable() {
+        var p = new URLSearchParams();
+        ['stage','source','status','end_from','end_to'].forEach(function(k) {
+            var el = document.querySelector('[name="' + k + '"]');
+            if (el && el.value) p.set(k, el.value);
+        });
+        var s = document.querySelector('[name=\"search\"]');
+        if (s && s.value) p.set('search', s.value);
+        var a = document.querySelector('[name=\"archived\"]');
+        if (a) p.set('archived', a.value);
+        // P13b G3：批量操作后保持排序
+        var so = document.querySelector('[name=\"sort\"]');
+        var di = document.querySelector('[name=\"dir\"]');
+        if (so && so.value) { p.set('sort', so.value); p.set('dir', di.value); }
+        htmx.ajax('GET', '/api/orders?' + p.toString(), { target: '#order-table-body' });
+    }
+
+    // HTMX refresh: 表格被替换后（筛选或批量操作后），完整重置选择状态
+    document.addEventListener('htmx:afterSwap', function(evt) {
+        if (evt.detail.target.id === 'order-table-body') {
+            selectedIds.clear();
+            var bar = document.getElementById('batch-bar');
+            if (bar) bar.style.display = 'none';
+            var cnt = document.getElementById('batch-count');
+            if (cnt) cnt.textContent = '0';
+            var act = document.getElementById('batch-action');
+            if (act) act.value = '';
+            document.querySelectorAll('.batch-btn.active').forEach(function(b) { b.classList.remove('active'); });
+            var sa = document.getElementById('select-all');
+            if (sa) sa.checked = false;
+        }
+    });
+})();
+</script>
+{% endblock %}

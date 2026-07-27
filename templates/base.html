@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}oimimo scheduler{% endblock %}</title>
+
+    <!-- 本地 vendor：全局必需库（HTMX + Lucide + JsBarcode）改为本地引用，离线秒开、不再阻塞等待外网 CDN。
+         页面专属库（Gantt/Chart/FullCalendar/Sortable）仍在各页面 head_extra 按需加载。 -->
+    <script src="{{ url_for('static', filename='vendor/htmx.min.js') }}"></script>
+    <script src="{{ url_for('static', filename='vendor/lucide.min.js') }}"></script>
+    <!-- JsBarcode：小票底部条码（订单创建时间编码） -->
+    <script src="{{ url_for('static', filename='vendor/jsbarcode.all.min.js') }}"></script>
+
+    <!-- Styles -->
+    <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='logo.svg') }}">
+    <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='logo.ico') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+    {% if theme_css %}
+    <style>{{ theme_css|safe }}</style>
+    {% endif %}
+
+    <!-- P16i 轻量预取缓存（任务卡 39 / T16i.2）：Speculation Rules 仅对 8 个主导航页做
+         hover/pointerdown 预取（eagerness=moderate），切换近乎瞬时、消除白屏闪烁。
+         范围克制（仅导航主页面，不含详情/动作链接）；预取条目为临近点击时抓取的新鲜 HTML，
+         配合 app.js 写后失效逻辑，避免陈旧数据。不支持的浏览器自动忽略此脚本。 -->
+    <script type="speculationrules">
+    {
+        "prefetch": [{
+            "source": "list",
+            "urls": ["/", "/income", "/calendar", "/orders", "/orders/kanban", "/customers", "/gallery", "/settings"],
+            "eagerness": "moderate"
+        }]
+    }
+    </script>
+
+    {% block head_extra %}{% endblock %}
+</head>
+<body>
+    <div class="app-layout">
+        <!-- 侧边栏 -->
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-brand">
+                <img src="{{ url_for('static', filename='logo.svg') }}"
+                     class="brand-icon" alt="oimimo"
+                     onerror="if(!this.dataset.fb){this.dataset.fb=1;this.onerror=null;this.src='{{ url_for('static', filename='logo.png') }}';}">
+                <span class="brand-text">
+                    <span class="brand-line-main">oimimo</span>
+                    <span class="brand-line-sub">scheduler</span>
+                </span>
+            </div>
+            <nav class="sidebar-nav">
+                <a href="/" class="nav-item {{ 'active' if request.path == '/' }}">
+                    <i data-lucide="home" class="nav-icon"></i>
+                    <span>主页</span>
+                </a>
+                <a href="/income" class="nav-item {{ 'active' if request.path == '/income' }}">
+                    <i data-lucide="trending-up" class="nav-icon"></i>
+                    <span>收入看板</span>
+                </a>
+                <a href="/calendar" class="nav-item {{ 'active' if request.path == '/calendar' }}">
+                    <i data-lucide="calendar-days" class="nav-icon"></i>
+                    <span>日历视图</span>
+                </a>
+                <a href="/orders" class="nav-item {{ 'active' if request.path == '/orders' }}">
+                    <i data-lucide="list" class="nav-icon"></i>
+                    <span>排单列表</span>
+                </a>
+                <a href="/orders/kanban" class="nav-item {{ 'active' if request.path == '/orders/kanban' }}">
+                    <i data-lucide="columns-3" class="nav-icon"></i>
+                    <span>看板视图</span>
+                </a>
+                <a href="/customers" class="nav-item {{ 'active' if request.path.startswith('/customers') }}">
+                    <i data-lucide="users" class="nav-icon"></i>
+                    <span>客户管理</span>
+                </a>
+                <a href="/gallery" class="nav-item {{ 'active' if request.path == '/gallery' }}">
+                    <i data-lucide="image" class="nav-icon"></i>
+                    <span>画廊</span>
+                </a>
+                <div class="nav-divider"></div>
+                <a href="/settings" class="nav-item {{ 'active' if request.path == '/settings' }}">
+                    <i data-lucide="settings" class="nav-icon"></i>
+                    <span>设置</span>
+                </a>
+                <a href="#" onclick="openCenterModal();return false;" class="nav-item nav-item-cta">
+                    <i data-lucide="plus-circle" class="nav-icon"></i>
+                    <span>新建订单</span>
+                </a>
+                <a href="#" onclick="openCenterModal('/orders/templates', '模板管理');return false;" class="nav-item">
+                    <i data-lucide="layout-template" class="nav-icon"></i>
+                    <span>模板管理</span>
+                </a>
+            </nav>
+            <div class="sidebar-footer">
+                <button class="sidebar-toggle-btn" onclick="toggleSidebar()" title="收起/展开侧边栏">
+                    <i data-lucide="panel-left-close" class="nav-icon" style="width:18px;height:18px;"></i>
+                </button>
+                <span class="sidebar-version">V2 · 开发版</span>
+            </div>
+        </aside>
+
+        <!-- 主内容区 -->
+        <main class="main-content" id="main-content">
+            <!-- 面包屑导航（一级页不显示） -->
+            {% set primary_pages = ['/', '/income', '/calendar', '/orders', '/orders/kanban', '/customers', '/gallery', '/settings'] %}
+            {% if request.path not in primary_pages %}
+            <nav class="breadcrumb-bar">
+                <a href="/" class="breadcrumb-link">主页</a>
+                {% if request.path.startswith('/orders/') and request.path != '/orders/kanban' %}
+                <span class="breadcrumb-sep">›</span>
+                <a href="/orders" class="breadcrumb-link">排单列表</a>
+                {% if '/edit' in request.path %}
+                <span class="breadcrumb-sep">›</span>
+                <span class="breadcrumb-current">编辑订单</span>
+                {% elif '/new' in request.path %}
+                <span class="breadcrumb-sep">›</span>
+                <span class="breadcrumb-current">新建订单</span>
+                {% else %}
+                <span class="breadcrumb-sep">›</span>
+                <span class="breadcrumb-current">{% if breadcrumb_title is defined %}{{ breadcrumb_title }}{% else %}订单详情{% endif %}</span>
+                {% endif %}
+                {% elif request.path.startswith('/customers/') %}
+                <span class="breadcrumb-sep">›</span>
+                <a href="/customers" class="breadcrumb-link">客户管理</a>
+                {% if '/edit' in request.path %}
+                <span class="breadcrumb-sep">›</span>
+                <span class="breadcrumb-current">编辑客户</span>
+                {% else %}
+                <span class="breadcrumb-sep">›</span>
+                <span class="breadcrumb-current">{% if breadcrumb_title is defined %}{{ breadcrumb_title }}{% else %}客户详情{% endif %}</span>
+                {% endif %}
+                {% else %}
+                <span class="breadcrumb-sep">›</span>
+                <span class="breadcrumb-current">{% block breadcrumb_custom %}{% endblock %}</span>
+                {% endif %}
+            </nav>
+            {% endif %}
+            {% block content %}{% endblock %}
+        </main>
+    </div>
+
+    <!-- 居中模态框（Notion 风格新建订单） -->
+    <div id="center-modal" class="modal-overlay hidden" style="position:fixed;inset:0;background:rgba(15,15,15,0.4);z-index:2000;display:flex;align-items:flex-start;justify-content:center;padding-top:8vh;">
+        <div class="modal-content" style="background:var(--color-surface);border-radius:var(--radius-lg);width:820px;max-width:95vw;max-height:85vh;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 8px 40px rgba(0,0,0,0.2);">
+            <div class="modal-header" style="display:flex;align-items:center;justify-content:space-between;padding:var(--space-md) var(--space-lg);border-bottom:1px solid var(--color-border);background:var(--color-surface);flex-shrink:0;border-radius:var(--radius-lg) var(--radius-lg) 0 0;">
+                <h3 style="font-size:1.1rem;font-weight:700;">新建订单</h3>
+                <div style="display:flex;gap:8px;align-items:center;">
+                    <div id="center-modal-actions"></div>
+                    <button onclick="closeCenterModal()" style="width:32px;height:32px;border:none;background:var(--color-bg);border-radius:50%;font-size:1.2rem;cursor:pointer;display:flex;align-items:center;justify-content:center;color:var(--color-text-secondary);">×</button>
+                </div>
+            </div>
+            <div id="center-modal-body" style="padding:var(--space-lg);overflow-y:auto;flex:1;border-radius:0 0 var(--radius-lg) var(--radius-lg);">
+                <!-- HTMX 加载表单 -->
+            </div>
+        </div>
+    </div>
+
+    <!-- 编辑抽屉 -->
+    <div id="edit-drawer" class="drawer hidden">
+        <div class="drawer-overlay" onclick="closeDrawer()"></div>
+        <div class="drawer-content">
+            <div class="drawer-header">
+                <h3>编辑订单</h3>
+                <button class="drawer-close" onclick="closeDrawer()">&times;</button>
+            </div>
+            <div id="drawer-body">
+                <!-- HTMX 加载 -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast 通知 -->
+    <div id="toast-container" class="toast-container"></div>
+
+    <!-- P20-F16：统计明细小票（纸张纹理 + 双锯齿边 + 底部条码） -->
+    <div id="receipt-modal" class="receipt-overlay hidden" onclick="if(event.target===this)closeReceipt()">
+        <div class="receipt">
+            <div class="receipt-zigzag receipt-zigzag-top"></div>
+            <div class="receipt-logo">
+                {% set receipt_logo_svg = url_for('static', filename='logo.svg') %}
+                {% set receipt_logo_png = url_for('static', filename='logo.png') %}
+                <img src="{{ receipt_logo_svg }}" alt="oimimo"
+                     onerror="if(!this.dataset.fb){this.dataset.fb=1;this.onerror=null;this.src='{{ receipt_logo_png }}';}">
+            </div>
+            <button class="receipt-close" onclick="closeReceipt()" aria-label="关闭">&times;</button>
+            <div class="receipt-title" id="receipt-title">明细</div>
+            <div class="receipt-subtitle" id="receipt-subtitle"></div>
+            <div class="receipt-divider"></div>
+            <div class="receipt-body" id="receipt-body"></div>
+            <div class="receipt-divider"></div>
+            <div class="receipt-total" id="receipt-total"></div>
+            <div class="receipt-barcode" id="receipt-barcode"></div>
+            <div class="receipt-zigzag receipt-zigzag-bottom"></div>
+        </div>
+    </div>
+
+    <!-- P18-F4.4：快捷键映射注入（app.js 统一 keydown 分发器读取） -->
+    <script>window.__SHORTCUTS = {{ shortcuts|tojson }};</script>
+    <script src="{{ url_for('static', filename='app.js') }}"></script>
+    <script src="{{ url_for('static', filename='datetime-toggle.js') }}"></script>
+    <script>
+        // 初始化 Lucide 图标
+        lucide.createIcons();
+        // HTMX after-swap 重新渲染图标
+        document.addEventListener('htmx:afterSwap', () => lucide.createIcons());
+    </script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>

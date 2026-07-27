@@ -1,0 +1,54 @@
+{# 统计卡片 partial — P13a 口径重定义：归档判定收入/完成，环比增红降绿，点击弹小票明细 #}
+{% macro change_line(pct) %}
+    {% if pct is not none %}
+    <div class="stat-card-change {{ 'up' if pct >= 0 else 'down' }}">
+        {{ '↗' if pct >= 0 else '↘' }}
+        {{ pct|abs }}%
+        <span style="font-weight:400;">{{ stats.compare_label }}</span>
+    </div>
+    {% endif %}
+{% endmacro %}
+
+<div class="stats-grid" id="stats-grid"
+     data-range-from="{{ stats.range_start or '' }}"
+     data-range-to="{{ stats.range_end or '' }}"
+     data-range-label="{{ stats.range_label }}">
+    <div class="stat-card stat-card-clickable" data-metric="active" data-label="进行中">
+        <div class="stat-card-label">进行中</div>
+        <div class="stat-card-value" id="stat-active">{{ stats.active_count }}</div>
+        {{ change_line(stats.active_change) }}
+        {% if stats.active_change is none %}<div class="stat-card-label">活跃订单</div>{% endif %}
+    </div>
+
+    <div class="stat-card stat-card-clickable" data-metric="income" data-label="{{ '收入' if stats.preset in ['all', 'custom'] else stats.range_label + '收入' }}">
+        <div class="stat-card-label"><span class="hint" title="按排期月份">{{ '收入' if stats.preset in ['all', 'custom'] else stats.range_label + '收入' }}</span></div>
+        <div class="stat-card-value" id="stat-income">¥{{ "%.0f"|format(stats.income) }}</div>
+        {{ change_line(stats.income_change) }}
+        {% if stats.income_change is none %}<div class="stat-card-label">已归档实收（净额）</div>{% endif %}
+    </div>
+
+    <div class="stat-card stat-card-clickable" data-metric="overdue" data-label="逾期">
+        <div class="stat-card-label">逾期</div>
+        <div class="stat-card-value" id="stat-overdue" style="{% if stats.overdue_count > 0 %}color:var(--color-danger);{% endif %}">{{ stats.overdue_count }}</div>
+        <div class="stat-card-label">全时间口径</div>
+    </div>
+
+    <div class="stat-card stat-card-clickable" data-metric="completed" data-label="已完成">
+        <div class="stat-card-label"><span class="hint" title="按排期月份">已完成</span></div>
+        <div class="stat-card-value" id="stat-completed">{{ stats.completed_count }}</div>
+        {{ change_line(stats.completed_change) }}
+        {% if stats.completed_change is none %}<div class="stat-card-label">已归档订单（不含退单）</div>{% endif %}
+    </div>
+
+    <div class="stat-card stat-card-clickable" data-metric="expected" data-label="预计收入">
+        <div class="stat-card-label">预计收入</div>
+        <div class="stat-card-value" id="stat-expected">¥{{ "%.0f"|format(stats.expected_income) }}</div>
+        {{ change_line(stats.expected_change) }}
+        {% if stats.expected_change is none %}<div class="stat-card-label">活跃订单实收（净额）</div>{% endif %}
+    </div>
+</div>
+{% if stats.is_custom_range %}
+<div style="text-align:right;font-size:0.75rem;color:var(--color-text-tertiary);margin-top:4px;" id="stats-range-info">
+    统计范围：{{ stats.range_start }} → {{ stats.range_end }}
+</div>
+{% endif %}

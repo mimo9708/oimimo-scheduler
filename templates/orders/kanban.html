@@ -1,0 +1,237 @@
+{% extends "base.html" %}
+{% block title %}看板视图 — oimimo scheduler{% endblock %}
+
+{% block head_extra %}
+    <!-- SortableJS（仅看板拖拽；app.js 的 initKanban 在此页调用 Sortable.create） -->
+    <script src="{{ url_for('static', filename='vendor/sortable.min.js') }}"></script>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h1 class="page-title">看板视图</h1>
+    </div>
+    <div style="display:flex;align-items:center;gap:var(--space-sm);">
+        <div class="kanban-filter" id="kanban-filter">
+            <button type="button" class="btn btn-ghost btn-sm" id="kanban-filter-btn"
+                    aria-label="筛选" aria-haspopup="true" aria-expanded="false"
+                    title="筛选" onclick="toggleKanbanFilter()">
+                <i data-lucide="sliders-horizontal" class="nav-icon" style="width:16px;height:16px;"></i>
+            </button>
+            <div class="kanban-filter-panel hidden" id="kanban-filter-panel" role="menu" aria-label="看板筛选">
+                <div class="kanban-filter-section">
+                    <div class="kanban-filter-title">显示阶段</div>
+                    {% for stage in columns.keys() %}
+                    <label class="kanban-filter-item">
+                        <input type="checkbox" class="kanban-filter-stage" value="{{ stage }}" checked>
+                        <span>{{ stage }}</span>
+                    </label>
+                    {% endfor %}
+                </div>
+                <div class="kanban-filter-section">
+                    <div class="kanban-filter-title">类型</div>
+                    <label class="kanban-filter-item">
+                        <input type="radio" name="kanban-type" class="kanban-filter-type" value="all" checked>
+                        <span>全部</span>
+                    </label>
+                    <label class="kanban-filter-item">
+                        <input type="radio" name="kanban-type" class="kanban-filter-type" value="commercial">
+                        <span>仅商稿</span>
+                    </label>
+                    <label class="kanban-filter-item">
+                        <input type="radio" name="kanban-type" class="kanban-filter-type" value="personal">
+                        <span>仅个人</span>
+                    </label>
+                </div>
+                <div class="kanban-filter-section">
+                    <label class="kanban-filter-item">
+                        <input type="checkbox" id="kanban-filter-overdue">
+                        <span>仅逾期</span>
+                    </label>
+                </div>
+                <div class="kanban-filter-actions">
+                    <button type="button" class="btn btn-ghost btn-sm" onclick="resetKanbanFilter()">重置</button>
+                </div>
+            </div>
+        </div>
+        <a href="#" onclick="openCenterModal();return false;" class="btn btn-primary">+ 新建订单</a>
+    </div>
+</div>
+
+<div class="kanban-board" id="kanban-board">
+    {% for stage, orders in columns.items() %}
+    {% set stage_key = stage %}
+    <div class="kanban-column" data-stage="{{ stage }}" id="col-{{ loop.index }}"{% if not orders %} style="display:none;"{% endif %}>
+        <div class="kanban-column-header">
+            <span class="kanban-column-title">
+                {% if stage == '待开始' %}⚪
+                {% elif stage == '色稿' %}🔵
+                {% elif stage == '线稿' %}🩵
+                {% elif stage == '细化' %}🟠
+                {% elif stage == '收尾' %}🟣
+                {% elif stage == '完成' %}🟢
+                {% elif stage == '退单' %}🔴
+                {% endif %}
+                {{ stage }}
+            </span>
+            <div>
+                <span class="kanban-column-count">{{ orders|length }}</span>
+                <span class="kanban-column-total">
+                    {% set total = orders|sum(attribute='income') %}
+                    {% if total > 0 %}¥{{ "%.0f"|format(total) }}{% endif %}
+                </span>
+            </div>
+        </div>
+        {% for order in orders %}
+        {% include "partials/kanban_card.html" %}
+        {% endfor %}
+    </div>
+    {% endfor %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// ── 快速阶段切换 ──
+function quickStageSwitch(orderId, newStage) {
+    dirtyFetch('/orders/' + orderId + '/stage', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'stage=' + encodeURIComponent(newStage)
+    }).then(function(res) { return res.text(); })
+      .then(function(html) {
+        var oldCard = document.querySelector('.kanban-card[data-order-id="' + orderId + '"]');
+        // 找到目标列
+        var targetCol = document.querySelector('.kanban-column[data-stage="' + newStage + '"]');
+        if (!targetCol) { window.location.reload(); return; }
+        // 插入新卡片到目标列
+        var temp = document.createElement('div');
+        temp.innerHTML = html;
+        var newCard = temp.firstElementChild;
+        targetCol.appendChild(newCard);
+        // 删除旧卡片
+        if (oldCard) oldCard.remove();
+        // 重新初始化拖拽 + 更新统计
+        initKanban();
+        updateKanbanStats();
+        // 移动后的卡片沿用当前筛选
+        if (typeof applyKanbanFilters === 'function') applyKanbanFilters();
+        // 滚动到新卡片
+        newCard.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        showToast('→ ' + newStage, 'success');
+    }).catch(function() {
+        showToast('更新失败', 'error');
+    });
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+    initKanban();
+    initKanbanFilter();
+});
+
+// ── P18-F5 看板内容筛选（纯客户端显隐 + localStorage 持久） ──
+var KANBAN_FILTER_KEY = 'kanban_filters';
+
+function readKanbanFilters() {
+    try {
+        var raw = localStorage.getItem(KANBAN_FILTER_KEY);
+        if (raw) return JSON.parse(raw);
+    } catch (e) {}
+    return { hiddenStages: [], type: 'all', overdue: false };
+}
+
+function writeKanbanFilters(f) {
+    try { localStorage.setItem(KANBAN_FILTER_KEY, JSON.stringify(f)); } catch (e) {}
+}
+
+// 依据当前筛选对 DOM 增删 .hidden（不请求后端）
+function applyKanbanFilters() {
+    var f = readKanbanFilters();
+    document.querySelectorAll('.kanban-column').forEach(function(col) {
+        var stage = col.getAttribute('data-stage');
+        col.classList.toggle('hidden', f.hiddenStages.indexOf(stage) !== -1);
+    });
+    document.querySelectorAll('.kanban-card').forEach(function(card) {
+        var isCommercial = card.getAttribute('data-commercial') === '1';
+        var isOverdue = card.getAttribute('data-overdue') === '1';
+        var show = true;
+        if (f.type === 'commercial' && !isCommercial) show = false;
+        if (f.type === 'personal' && isCommercial) show = false;
+        if (f.overdue && !isOverdue) show = false;
+        card.classList.toggle('hidden', !show);
+    });
+}
+
+// 用当前筛选状态回填面板控件（加载/重置时调用）
+function syncKanbanFilterUI() {
+    var f = readKanbanFilters();
+    document.querySelectorAll('.kanban-filter-stage').forEach(function(cb) {
+        cb.checked = f.hiddenStages.indexOf(cb.value) === -1;
+    });
+    document.querySelectorAll('.kanban-filter-type').forEach(function(rb) {
+        rb.checked = (rb.value === f.type);
+    });
+    var od = document.getElementById('kanban-filter-overdue');
+    if (od) od.checked = !!f.overdue;
+}
+
+// 面板控件变化 → 收集 → 落库 → 应用
+function onKanbanFilterChange() {
+    var f = { hiddenStages: [], type: 'all', overdue: false };
+    document.querySelectorAll('.kanban-filter-stage').forEach(function(cb) {
+        if (!cb.checked) f.hiddenStages.push(cb.value);
+    });
+    var t = document.querySelector('.kanban-filter-type:checked');
+    if (t) f.type = t.value;
+    var od = document.getElementById('kanban-filter-overdue');
+    if (od) f.overdue = od.checked;
+    writeKanbanFilters(f);
+    applyKanbanFilters();
+}
+
+function toggleKanbanFilter() {
+    var panel = document.getElementById('kanban-filter-panel');
+    var btn = document.getElementById('kanban-filter-btn');
+    if (!panel) return;
+    var willShow = panel.classList.contains('hidden');
+    panel.classList.toggle('hidden', !willShow);
+    btn.setAttribute('aria-expanded', willShow ? 'true' : 'false');
+}
+
+function resetKanbanFilter() {
+    writeKanbanFilters({ hiddenStages: [], type: 'all', overdue: false });
+    syncKanbanFilterUI();
+    applyKanbanFilters();
+}
+
+function initKanbanFilter() {
+    syncKanbanFilterUI();
+    applyKanbanFilters();
+    // 绑定控件变化
+    document.querySelectorAll('.kanban-filter-stage, .kanban-filter-type, #kanban-filter-overdue')
+        .forEach(function(el) { el.addEventListener('change', onKanbanFilterChange); });
+    // 点击面板外区域收起
+    document.addEventListener('click', function(e) {
+        var wrap = document.getElementById('kanban-filter');
+        var panel = document.getElementById('kanban-filter-panel');
+        if (wrap && panel && !panel.classList.contains('hidden') && !wrap.contains(e.target)) {
+            panel.classList.add('hidden');
+            document.getElementById('kanban-filter-btn').setAttribute('aria-expanded', 'false');
+        }
+    });
+    // Escape 收起面板
+    document.addEventListener('keydown', function(e) {
+        if (e.key !== 'Escape') return;
+        var panel = document.getElementById('kanban-filter-panel');
+        if (panel && !panel.classList.contains('hidden')) {
+            panel.classList.add('hidden');
+            document.getElementById('kanban-filter-btn').setAttribute('aria-expanded', 'false');
+        }
+    });
+}
+
+// ── 阶段列固定顺序：不提供列拖拽排序 ──
+// 「待开始 → 色稿 → 线稿 → 细化 → 收尾 → 完成 → 退单」为固定工作流，
+// 列头（.kanban-column-header）不作为拖拽手柄，仅卡片可在列间拖拽。
+</script>
+{% endblock %}

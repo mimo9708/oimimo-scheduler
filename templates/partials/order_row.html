@@ -1,0 +1,36 @@
+{# 单行订单 partial — 含复选框 #}
+<tr id="order-row-{{ o.id }}">
+    <td><input type="checkbox" class="order-checkbox" data-id="{{ o.id }}" onclick="event.stopPropagation();toggleOne(this,{{ o.id }})"></td>
+    <td style="cursor:pointer" onclick="location.href='/orders/{{ o.id }}'">#{{ o.id }}</td>
+    <td style="cursor:pointer" onclick="location.href='/orders/{{ o.id }}'">{{ o.customer_name or '-' }}</td>
+    <td style="cursor:pointer" onclick="location.href='/orders/{{ o.id }}'"><strong>{{ o.project_name }}</strong></td>
+    <td style="cursor:pointer" onclick="location.href='/orders/{{ o.id }}'">{{ o.source }}</td>
+    <td style="cursor:pointer" onclick="location.href='/orders/{{ o.id }}'">{{ o.commission_type or '-' }}</td>
+    <td style="cursor:pointer" onclick="location.href='/orders/{{ o.id }}'">
+        <span class="stage-badge {{ o.current_stage|stage_class }}">{{ o.current_stage }}</span>
+    </td>
+    <td style="cursor:pointer" onclick="location.href='/orders/{{ o.id }}'">
+        {% if o.is_archived %}
+        <span style="color:var(--color-text-tertiary);font-size:0.78rem;">已归档</span>
+        {% else %}
+        {{ o.ddl_status }}
+        {% endif %}
+    </td>
+    <td style="cursor:pointer" onclick="location.href='/orders/{{ o.id }}'">
+        {% if o.source in PLATFORM_SOURCES %}
+        <span class="amount">¥{{ "%.0f"|format(o.income) }}</span>
+        <span style="font-size:0.7rem;color:var(--color-text-tertiary);"> -{{ "%.0f"|format(o.platform_fee) }}</span>
+        {% else %}
+        <span class="amount">¥{{ "%.0f"|format(o.income) }}</span>
+        {% endif %}
+    </td>
+    <td style="cursor:pointer" onclick="location.href='/orders/{{ o.id }}'"><span class="amount" style="color:var(--color-success);font-weight:600;">¥{{ "%.0f"|format(o.actual_received) }}</span></td>
+    <td style="cursor:pointer" onclick="location.href='/orders/{{ o.id }}'">{{ o.payment_status }}</td>
+    <td style="cursor:pointer;font-size:0.82rem;" onclick="location.href='/orders/{{ o.id }}'">
+        {% if o.scheduled_start %}
+        {{ o.scheduled_start }} → {{ o.scheduled_end or o.scheduled_start }}
+        {% else %}
+        <span style="color:var(--color-text-tertiary);">未排期</span>
+        {% endif %}
+    </td>
+</tr>

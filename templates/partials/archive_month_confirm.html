@@ -1,0 +1,16 @@
+
+<div style="padding:8px 4px;">
+    <h2 style="font-size:1.15rem;margin-bottom:8px;">归档月份确认</h2>
+    <p style="color:var(--color-text-secondary);margin-bottom:16px;line-height:1.6;">
+        排单截止日期（<strong>{{ order.scheduled_end }}</strong>）与当前月份不同。<br>
+        请选择该订单应计入哪个月份的收入统计：
+    </p>
+    <div style="display:flex;flex-direction:column;gap:var(--space-sm);">
+        <button class="btn btn-primary"
+                hx-post="/orders/{{ order.id }}/archive?confirm=month_scheduled"
+                hx-target="#center-modal-body" hx-swap="innerHTML">按排单月份（{{ order.scheduled_end[:7] }}）统计</button>
+        <button class="btn btn-secondary"
+                hx-post="/orders/{{ order.id }}/archive?confirm=month_current"
+                hx-target="#center-modal-body" hx-swap="innerHTML">按当前月份（{{ now_month }}）统计</button>
+    </div>
+</div>

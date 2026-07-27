@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}{{ '新建客户' if is_new else '编辑客户 — ' + customer.name }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h1 class="page-title">{{ '新建客户' if is_new else '编辑客户' }}</h1>
+        {% if not is_new %}
+        <p class="page-subtitle">{{ customer.name }}</p>
+        {% endif %}
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-body">
+        <form method="POST"
+              action="{{ '/customers' if is_new else '/customers/' ~ customer.id ~ '/edit' }}"
+              class="form-container">
+
+            <div class="form-group">
+                <label for="name">客户名称 *</label>
+                <input type="text" name="name" id="name" required
+                       value="{{ customer.name if customer else '' }}"
+                       placeholder="如：楚门清">
+            </div>
+
+            <div class="form-group">
+                <label for="platform_url">平台链接</label>
+                <input type="url" name="platform_url" id="platform_url"
+                       value="{{ customer.platform_url if customer else '' }}"
+                       placeholder="如：米画师/B站个人主页链接">
+            </div>
+
+            <div class="form-group">
+                <label for="preferences">偏好</label>
+                <input type="text" name="preferences" id="preferences"
+                       value="{{ customer.preferences if customer else '' }}"
+                       placeholder="如：喜欢近景贴贴、暖色调">
+            </div>
+
+            <div class="form-group">
+                <label for="tags">标签</label>
+                <input type="text" name="tags" id="tags"
+                       value="{{ customer.tags if customer else '' }}"
+                       placeholder="可一次输入多个标签，用逗号分隔，如：VIP,长期合作,插画类">
+                <p style="margin:4px 0 0;font-size:0.75rem;color:var(--color-text-tertiary);">多个标签用逗号分隔，中文逗号（，）和英文逗号（,）均可，逗号前后的空格会自动去除</p>
+            </div>
+
+            <div class="form-group">
+                <label for="notes">备注</label>
+                <textarea name="notes" id="notes" rows="3"
+                          placeholder="如：88折优惠、VIP客户">{{ customer.notes if customer else '' }}</textarea>
+            </div>
+
+            <div class="form-actions">
+                <button type="submit" class="btn btn-primary">
+                    {{ '✅ 创建客户' if is_new else '💾 保存修改' }}
+                </button>
+                <a href="{{ '/customers' if is_new else '/customers/' ~ customer.id|string }}" class="btn btn-secondary">取消</a>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}

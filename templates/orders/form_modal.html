@@ -1,0 +1,209 @@
+{# 模态框中的订单表单 — 不继承 base.html #}
+<form method="POST" action="/orders" class="form-container" style="max-width:100%;"
+      hx-post="/orders"
+      hx-target="#center-modal-body"
+      hx-swap="innerHTML"
+      id="order-form-modal">
+
+    <input type="hidden" name="modal" value="1">
+
+    {# P18-F3：从模板快速预填 #}
+    {% if templates %}
+    <div class="form-group" style="margin-bottom:var(--space-md);">
+        <label style="font-size:0.78rem;color:var(--color-text-tertiary);">从模板创建</label>
+        <div style="display:flex;gap:6px;align-items:center;">
+            <select id="tpl-select" style="flex:1;" onchange="if(this.value)openCenterModal('/orders/new?modal=1&template='+this.value)">
+                <option value="">— 选择模板预填 —</option>
+                {% for t in templates %}
+                <option value="{{ t.id }}" {% if prefill and t.id|string == request.args.get('template') %}selected{% endif %}>{{ t.name }}</option>
+                {% endfor %}
+            </select>
+            <button type="button" class="btn btn-ghost btn-sm" title="删除选中模板" onclick="deleteTpl()">🗑</button>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- P15e：双栏布局，最大化利用弹窗横向空间 -->
+    <div class="form-grid-2col">
+      <!-- 左栏：基础信息 -->
+      <div class="form-col">
+        <div class="form-group">
+            <label for="customer_id">客户
+                <button type="button" class="btn btn-ghost btn-sm" style="font-size:0.72rem;color:var(--color-primary);"
+                        onclick="document.getElementById('quick-cust-modal').classList.toggle('hidden')">+ 新建</button>
+            </label>
+            <div id="customer-select-wrapper-modal">
+                <select name="customer_id">
+                    <option value="">— 选择客户 —</option>
+                    {% for c in customers %}
+                    <option value="{{ c.id }}" {% if prefill and prefill.customer_id|string == c.id|string %}selected{% endif %}>{{ c.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div id="quick-cust-modal" class="hidden" style="margin-top:6px;padding:10px;background:var(--color-bg);border-radius:var(--radius-sm);border:1px solid var(--color-border);">
+                <input type="text" name="quick_name" placeholder="客户名称" style="width:100%;padding:6px 8px;border:1px solid var(--color-border);border-radius:var(--radius-sm);font-size:0.82rem;margin-bottom:4px;">
+                <button type="button" class="btn btn-primary btn-sm"
+                        hx-post="/api/customers/quick"
+                        hx-target="#customer-select-wrapper-modal"
+                        hx-include="[name='quick_name']"
+                        hx-swap="innerHTML"
+                        hx-on:htmx:after-request="document.getElementById('quick-cust-modal').classList.add('hidden')">创建</button>
+            </div>
+        </div>
+        <div class="form-group">
+            <label for="project_name">项目名称 *</label>
+            <input type="text" name="project_name" id="project_name" required placeholder="如：罗马大浴场双人" value="{{ prefill.project_name or '' }}">
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label for="source">来源</label>
+                <input type="text" name="source" list="modal-source-list" value="{{ prefill.source or '米画师' }}" autocomplete="off">
+                <datalist id="modal-source-list">{% for s in existing_sources %}<option value="{{ s }}">{% endfor %}</datalist>
+            </div>
+            <div class="form-group">
+                <label for="commission_type">稿件类别</label>
+                <input type="text" name="commission_type" list="modal-type-list" value="{{ prefill.commission_type or '' }}" autocomplete="off">
+                <datalist id="modal-type-list">{% for t in existing_types %}<option value="{{ t }}">{% endfor %}</datalist>
+            </div>
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label for="is_commercial">用途</label>
+                <select name="is_commercial"><option value="0" {% if prefill and prefill.is_commercial|string == '0' %}selected{% endif %}>私用</option><option value="1" {% if prefill and prefill.is_commercial|string == '1' %}selected{% endif %}>商用</option></select>
+            </div>
+            <div class="form-group">
+                <label for="current_stage">阶段</label>
+                <select name="current_stage">
+                    {% for s in STAGE_CHOICES %}
+                    <option value="{{ s }}" {% if s == (prefill.current_stage or '待开始') %}selected{% endif %}>{{ s }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+        <div class="form-group">
+            <label for="payment_status">收款</label>
+            <select name="payment_status">
+                {% for s in PAYMENT_CHOICES %}
+                <option value="{{ s }}" {% if s == (prefill.payment_status or '未收款') %}selected{% endif %}>{{ s }}</option>
+                {% endfor %}
+            </select>
+        </div>
+      </div>
+
+      <!-- 右栏：链接 / 财务 / 排期 / 备注 -->
+      <div class="form-col">
+        <div class="form-group">
+            <label for="platform_url">原订单链接 <span style="font-weight:normal;color:var(--color-text-tertiary);font-size:0.78rem;">（如米画师/B站工坊）</span></label>
+            <input type="url" name="platform_url" id="platform_url" placeholder="https://..." value="{{ prefill.platform_url or '' }}">
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label for="deposit">定金 (¥)</label>
+                <input type="number" name="deposit" step="0.01" min="0" value="{{ prefill.deposit or 0 }}" oninput="calcModalActual()">
+            </div>
+            <div class="form-group">
+                <label for="balance">尾款 (¥)</label>
+                <input type="number" name="balance" step="0.01" min="0" value="{{ prefill.balance or 0 }}" oninput="calcModalActual()">
+            </div>
+        </div>
+        <div class="form-group" id="modal-fee-field">
+            <label for="platform_fee_pct">手续费 (%)</label>
+            <input type="number" name="platform_fee_pct" step="0.1" min="0" max="100" value="{{ prefill.platform_fee_pct or 0 }}" oninput="calcModalActual()">
+        </div>
+        <div style="margin-top:var(--space-sm);padding:10px;background:var(--color-bg);border-radius:var(--radius-sm);font-size:0.85rem;" id="modal-preview-platform">
+            收入: <strong id="modal-income">¥0</strong>
+            手续费: <strong id="modal-fee" style="color:var(--color-danger);">¥0</strong>
+            实收: <strong id="modal-actual" style="color:var(--color-success);">¥0</strong>
+        </div>
+        <div style="margin-top:var(--space-sm);padding:10px;background:var(--color-bg);border-radius:var(--radius-sm);font-size:0.85rem;display:none;" id="modal-preview-direct">
+            定金+尾款: <strong id="modal-total">¥0</strong>
+            实收: <strong id="modal-actual2" style="color:var(--color-success);">¥0</strong>
+        </div>
+        <div class="schedule-group" style="margin-top:var(--space-md);">
+            <div class="schedule-group-title">排期信息</div>
+            <div class="form-row">
+                <div class="form-group date-field">
+                    <label>排单开始</label>
+                    <input type="date" name="scheduled_start">
+                </div>
+                <div class="form-group date-field">
+                    <label>排单截止</label>
+                    <input type="date" name="scheduled_end">
+                </div>
+            </div>
+            <div class="form-group date-field" style="margin-top:var(--space-sm);">
+                <label>页面截稿日 <span style="font-size:0.72rem;color:var(--color-text-tertiary);">参考</span></label>
+                <input type="date" name="page_deadline">
+            </div>
+        </div>
+        <div class="form-group">
+            <label for="notes">备注</label>
+            <textarea name="notes" rows="2">{{ prefill.notes or '' }}</textarea>
+        </div>
+        {# P18-F3：保存为模板 #}
+        <div class="form-group" style="margin-top:var(--space-sm);padding:10px;background:var(--color-bg);border-radius:var(--radius-sm);">
+            <label style="display:flex;align-items:center;gap:6px;font-weight:normal;cursor:pointer;">
+                <input type="checkbox" name="save_as_template" value="1" style="width:auto;" onchange="document.getElementById('tpl-name-wrap').style.display=this.checked?'block':'none'">
+                保存为模板（可复用字段快照）
+            </label>
+            <div id="tpl-name-wrap" style="display:none;margin-top:6px;">
+                <input type="text" name="template_name" placeholder="模板名称，如：米画师标准约稿" style="width:100%;padding:6px 8px;border:1px solid var(--color-border);border-radius:var(--radius-sm);font-size:0.82rem;">
+            </div>
+        </div>
+      </div>
+    </div>
+
+    {# P16g：底部操作栏已移至表单顶部，此处不再重复 #}
+</form>
+
+<script src="/static/datetime-toggle.js"></script>
+<script>
+// 初始化双模式时间选择器（setTimeout 确保 HTMX 注入后 DOM 就绪）
+setTimeout(function() { DateTimeToggle.initAll('#center-modal-body .date-field input[type="date"], #center-modal-body .date-field input[type="datetime-local"]'); }, 0);
+
+// 将操作按钮注入模态框标题栏（B3），确保滑动时始终可见
+(function() {
+    var container = document.getElementById('center-modal-actions');
+    if (container) {
+        container.innerHTML = '<button type="submit" form="order-form-modal" class="btn btn-primary">创建订单</button>'
+            + '<button type="button" class="btn btn-secondary" onclick="closeCenterModal()">取消</button>';
+    }
+})();
+
+var PLATFORM = {{ PLATFORM_SOURCES|map('string')|list|tojson }};
+function isPlat() {
+    var s = document.querySelector('[name="source"]').value || '米画师';
+    return PLATFORM.indexOf(s) !== -1;
+}
+function toggleModalFee() {
+    var p = isPlat();
+    document.getElementById('modal-fee-field').style.display = p ? '' : 'none';
+    document.getElementById('modal-preview-platform').style.display = p ? '' : 'none';
+    document.getElementById('modal-preview-direct').style.display = p ? 'none' : '';
+    calcModalActual();
+}
+function calcModalActual() {
+    var d = parseFloat(document.querySelector('[name="deposit"]').value) || 0;
+    var b = parseFloat(document.querySelector('[name="balance"]').value) || 0;
+    var p = isPlat() ? (parseFloat(document.querySelector('[name="platform_fee_pct"]').value) || 0) : 0;
+    var income = d + b, fee = Math.round(income * p) / 100, actual = income - fee;
+    if (isPlat()) {
+        document.getElementById('modal-income').textContent = '¥' + income.toFixed(2);
+        document.getElementById('modal-fee').textContent = '-¥' + fee.toFixed(2);
+        document.getElementById('modal-actual').textContent = '¥' + actual.toFixed(2);
+    } else {
+        document.getElementById('modal-total').textContent = '¥' + income.toFixed(2);
+        document.getElementById('modal-actual2').textContent = '¥' + actual.toFixed(2);
+    }
+}
+document.querySelector('[name="source"]').addEventListener('input', toggleModalFee);
+document.querySelector('[name="source"]').addEventListener('change', toggleModalFee);
+toggleModalFee();
+function deleteTpl() {
+    var sel = document.getElementById('tpl-select');
+    if (!sel || !sel.value) { alert('请先选择要删除的模板'); return; }
+    if (!confirm('删除模板「' + sel.options[sel.selectedIndex].text + '」？')) return;
+    dirtyFetch('/orders/templates/' + sel.value + '/delete', { method: 'POST' })
+        .then(function () { openCenterModal('/orders/new?modal=1'); });
+}
+</script>

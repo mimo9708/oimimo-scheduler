@@ -1,0 +1,27 @@
+# --- 运行时数据（用户数据，绝不入库）---
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.db.bak*
+uploads/
+exports/
+logs/
+
+# --- Python ---
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# --- 打包产物 ---
+build/
+dist/
+packaging/output/
+
+# --- 编辑器/系统 ---
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store

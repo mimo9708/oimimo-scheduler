@@ -1,0 +1,200 @@
+{% extends "base.html" %}
+{% block title %}客户管理 — oimimo scheduler{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h1 class="page-title">客户管理</h1>
+    </div>
+    <div>
+        <a href="/customers/new" class="btn btn-primary">+ 新建客户</a>
+    </div>
+</div>
+
+<!-- 搜索（P13b I1：含备注匹配） -->
+<div class="card" style="margin-bottom:var(--space-md);">
+    <div class="card-body">
+        <form class="filter-bar" method="GET" action="/customers">
+            <input type="search" name="search" placeholder="搜索客户名称/备注..."
+                   value="{{ search or '' }}">
+            {% if sort %}<input type="hidden" name="sort" value="{{ sort }}"><input type="hidden" name="dir" value="{{ direction }}">{% endif %}
+            <button type="submit" class="btn btn-primary btn-sm">搜索</button>
+            {% if search %}
+            <a href="/customers" class="btn btn-secondary btn-sm">清除</a>
+            {% endif %}
+        </form>
+    </div>
+</div>
+
+<!-- 批量操作栏 -->
+<div id="customer-batch-bar" class="card" style="margin-bottom:var(--space-md);display:none;">
+    <div class="card-body" style="display:flex;align-items:center;gap:var(--space-sm);flex-wrap:wrap;padding:10px 16px;">
+        <span style="font-size:0.85rem;font-weight:600;">已选 <span id="batch-count">0</span> 位客户</span>
+        <select id="batch-action" style="padding:6px 10px;border:1px solid var(--color-border);border-radius:var(--radius-sm);font-size:0.85rem;">
+            <option value="">— 批量操作 —</option>
+            <option value="delete:1">🗑️ 批量删除</option>
+        </select>
+        <button class="btn btn-primary btn-sm" onclick="doCustomerBatchAction()">执行</button>
+        <button class="btn btn-ghost btn-sm" onclick="clearCustomerSelection()">取消选择</button>
+    </div>
+</div>
+
+<!-- 客户列表 -->
+{# P13b I2：四列排序表头 — 三态循环，默认 total_spent DESC #}
+{% macro csort_th(key, label, hint='') %}
+{% set is_cur = (sort == key) %}
+{% if is_cur and direction == 'asc' %}{% set next_dir = 'desc' %}
+{% elif is_cur and direction == 'desc' %}{% set next_dir = '' %}
+{% else %}{% set next_dir = 'asc' %}{% endif %}
+<th class="sortable-th{% if is_cur %} sorted-{{ direction }}{% endif %}">
+    <a href="?{% if next_dir %}sort={{ key }}&dir={{ next_dir }}{% if search %}&search={{ search|urlencode }}{% endif %}{% else %}{% if search %}search={{ search|urlencode }}{% endif %}{% endif %}" class="sort-link">{% if hint %}<span class="hint" title="{{ hint }}">{{ label }}</span>{% else %}{{ label }}{% endif %}<span class="sort-arrow">{% if is_cur %}{{ '↑' if direction == 'asc' else '↓' }}{% endif %}</span></a>
+</th>
+{% endmacro %}
+<div class="card" style="overflow:visible;">
+    <div class="card-body" style="padding:0;">
+        {% if customers %}
+        <table>
+            <thead>
+                <tr>
+                    <th style="width:36px;"><input type="checkbox" id="select-all-customers" onclick="toggleAllCustomers(this)" title="全选"></th>
+                    {{ csort_th('id', 'ID') }}
+                    {{ csort_th('name', '客户名称') }}
+                    <th>平台</th>
+                    <th>偏好</th>
+                    <th>标签</th>
+                    {{ csort_th('total_spent', '累计消费', '仅统计已归档+已完成+已结算订单的实收金额，排除进行中/未收款/退单') }}
+                    {{ csort_th('purchase_count', '购买次数') }}
+                    <th>备注</th>
+                    <th>操作</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for c in customers %}
+                <tr>
+                    <td><input type="checkbox" class="customer-checkbox" data-id="{{ c.id }}" onclick="toggleOneCustomer(this, {{ c.id }})"></td>
+                    <td>#{{ c.id }}</td>
+                    <td>
+                        <strong>
+                            <a href="/customers/{{ c.id }}" style="color:var(--color-primary);">
+                                {{ c.name }}
+                            </a>
+                        </strong>
+                    </td>
+                    <td>
+                        {% if c.platform_url %}
+                        <a href="{{ c.platform_url }}" target="_blank" style="color:var(--color-info);font-size:0.82rem;">
+                            🔗 链接
+                        </a>
+                        {% else %}
+                        -
+                        {% endif %}
+                    </td>
+                    <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+                        {{ c.preferences or '-' }}
+                    </td>
+                    <td style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+                        {% if c.tags %}
+                            {% for tag in c.tags.split(',') %}
+                            <span class="stage-badge pending" style="font-size:0.7rem;margin-right:2px;">{{ tag.strip() }}</span>
+                            {% endfor %}
+                        {% else %}-{% endif %}
+                    </td>
+                    <td><span class="amount">¥{{ "%.2f"|format(c.total_spent) }}</span></td>
+                    <td>{{ c.purchase_count }}</td>
+                    <td style="max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+                        {{ c.notes or '-' }}
+                    </td>
+                    <td>
+                        <div style="display:flex;gap:4px;">
+                            <a href="/customers/{{ c.id }}" class="btn btn-ghost btn-sm">查看</a>
+                            <a href="/customers/{{ c.id }}/edit" class="btn btn-ghost btn-sm">编辑</a>
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <div class="empty-state">
+            <div class="empty-state-icon">👥</div>
+            <div class="empty-state-text">暂无客户数据</div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function() {
+    var selectedIds = new Set();
+
+    window.toggleAllCustomers = function(el) {
+        document.querySelectorAll('.customer-checkbox').forEach(function(cb) { cb.checked = el.checked; });
+        updateSel();
+    };
+
+    window.toggleOneCustomer = function(cb, customerId) {
+        if (cb.checked) selectedIds.add(customerId);
+        else selectedIds.delete(customerId);
+        updateSel();
+    };
+
+    function updateSel() {
+        selectedIds.clear();
+        document.querySelectorAll('.customer-checkbox:checked').forEach(function(cb) {
+            selectedIds.add(parseInt(cb.dataset.id));
+        });
+        var c = selectedIds.size;
+        document.getElementById('batch-count').textContent = c;
+        document.getElementById('customer-batch-bar').style.display = c > 0 ? '' : 'none';
+        document.getElementById('select-all-customers').checked = c > 0 && c === document.querySelectorAll('.customer-checkbox').length;
+    }
+
+    window.clearCustomerSelection = function() {
+        document.querySelectorAll('.customer-checkbox').forEach(function(cb) { cb.checked = false; });
+        document.getElementById('select-all-customers').checked = false;
+        updateSel();
+    };
+
+    window.doCustomerBatchAction = function() {
+        var actionVal = document.getElementById('batch-action').value;
+        if (!actionVal || selectedIds.size === 0) return;
+        var parts = actionVal.split(':');
+        var action = parts[0], value = parts.slice(1).join(':');
+
+        var labelMap = {'delete': '批量删除'};
+        var actionLabel = labelMap[action] || action;
+        var msg = '确定「' + actionLabel + '」' + selectedIds.size + ' 位客户？';
+        if (action === 'delete') msg += '\n\n注意：有关联订单的客户将被跳过，不会删除。';
+        if (!confirm(msg)) return;
+
+        var ids = Array.from(selectedIds);
+        var fd = new FormData();
+        fd.append('ids', ids.join(','));
+        fd.append('action', action);
+        fd.append('value', value);
+
+        var btn = document.querySelector('#customer-batch-bar .btn-primary');
+        btn.textContent = '处理中...'; btn.disabled = true;
+
+        dirtyFetch('/customers/batch', { method: 'POST', body: fd })
+            .then(function(r) { return r.json(); })
+            .then(function(r) {
+                btn.textContent = '执行'; btn.disabled = false;
+                if (r.success) {
+                    showToast(r.message || ('已处理 ' + r.count + ' 位客户'), 'success');
+                    // 刷新页面
+                    window.location.reload();
+                } else {
+                    showToast(r.error || '失败', 'error');
+                }
+            })
+            .catch(function() {
+                btn.textContent = '执行'; btn.disabled = false;
+                showToast('网络错误', 'error');
+            });
+    };
+})();
+</script>
+{% endblock %}

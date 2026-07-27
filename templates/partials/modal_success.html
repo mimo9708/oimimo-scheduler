@@ -1,0 +1,8 @@
+{# 模态框创建订单成功提示 #}
+<div style="text-align:center;padding:32px;">
+    <div style="font-size:3rem;margin-bottom:16px;">OK</div>
+    <h2 style="margin-bottom:8px;">订单已创建</h2>
+    <p style="color:var(--color-text-secondary);margin-bottom:24px;">#{{ order_id }} — {{ project_name }}</p>
+    <button class="btn btn-primary" onclick="closeCenterModal();window.location.href='/orders/{{ order_id }}'">查看订单</button>
+    <button class="btn btn-secondary" onclick="closeCenterModal()">关闭</button>
+</div>

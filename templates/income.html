@@ -1,0 +1,295 @@
+{% extends "base.html" %}
+{% block title %}收入看板 — oimimo scheduler{% endblock %}
+
+{% block head_extra %}
+    <!-- Chart.js（仅收入看板图表） -->
+    <script src="{{ url_for('static', filename='vendor/chart.min.js') }}"></script>
+{% endblock %}
+
+{% block content %}
+<div class="dashboard">
+
+    <div class="page-header">
+        <div>
+            <h1 class="page-title">收入看板</h1>
+        </div>
+        <div style="display:flex;gap:var(--space-sm);align-items:center;">
+            <span style="font-size:0.85rem;color:var(--color-text-secondary);">年度：</span>
+            <select onchange="updateParam('year', this.value)"
+                    style="padding:7px 12px;border:1px solid var(--color-border);border-radius:var(--radius-sm);font-size:0.9rem;font-weight:600;background:var(--color-surface);cursor:pointer;">
+                {% for y in available_years %}
+                <option value="{{ y }}" {% if y == selected_year %}selected{% endif %}>{{ y }} 年</option>
+                {% endfor %}
+            </select>
+            <!-- P16h 模块设置入口 -->
+            <div class="module-settings-wrap">
+                <button class="btn btn-sm btn-secondary" id="module-settings-btn" onclick="toggleModuleSettings()" title="自定义显示模块"> 模块</button>
+                <div class="module-settings-panel" id="module-settings-panel"></div>
+            </div>
+        </div>
+    </div>
+
+    {# P16c 已移除：本月收入/年收入/待收预估统计模块（原 stats-grid 三张 stat-card，连同空容器一并删除）。#}
+
+    <!-- 图表行 1 -->
+    <div class="charts-grid" data-module="charts-row1" data-module-title="月度收入 / 品类分布">
+        <div class="card">
+            <div class="card-header">
+                <span class="hint" title="按排期月份 · 净额">月度收入统计（已完成）</span>
+            </div>
+            <div class="card-body"><div class="chart-container" style="cursor:pointer;"><canvas id="monthly-stats-chart"></canvas></div></div>
+        </div>
+        <div class="card">
+            <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;">
+                <span class="hint" title="已完成订单 · 悬停看应收(毛)/实收(净)">品类分布</span>
+                <select id="type-month-filter" style="padding:4px 8px;border:1px solid var(--color-border);border-radius:var(--radius-sm);font-size:0.78rem;background:var(--color-surface);cursor:pointer;">
+                    <option value="">全年</option>
+                    {% for m in range(1, 13) %}
+                    <option value="{{ m }}">{{ m }}月</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="card-body"><div class="chart-container" style="max-height:300px;"><canvas id="type-chart"></canvas></div></div>
+        </div>
+    </div>
+
+    <!-- 图表行 2：预计收入 + 客户排名 -->
+    <div class="charts-grid" data-module="charts-row2" data-module-title="预计收入 / 客户排名">
+        <div class="card">
+            <div class="card-header">
+                <span class="hint" title="按排期月份 · 净额">每月预计收入（进行中）</span>
+            </div>
+            <div class="card-body"><div class="chart-container" style="cursor:pointer;"><canvas id="projected-chart"></canvas></div></div>
+        </div>
+        <div class="card">
+            <div class="card-header"><span class="hint" title="仅统计已归档+已完成+已结算订单的实收金额">客户消费排名</span></div>
+            <div class="card-body" style="padding:0;">
+                {% if top_customers %}
+                <div class="table-container">
+                    <table style="font-size:0.82rem;">
+                        <thead><tr><th>#</th><th>客户</th><th>消费</th><th>次</th></tr></thead>
+                        <tbody>
+                            {% for c in top_customers[:8] %}
+                            <tr onclick="window.location.href='/customers/{{ c.id }}'" style="cursor:pointer;">
+                                <td>{{ loop.index }}</td>
+                                <td>{{ c.name }}</td>
+                                <td class="amount">¥{{ "%.0f"|format(c.total_spent) }}</td>
+                                <td>{{ c.purchase_count }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <!-- 年收入累进（全宽） -->
+    <div class="card" style="margin-bottom:var(--space-md);" data-module="cumulative" data-module-title="年收入累进">
+        <div class="card-header">
+            <span>{{ selected_year }}年收入累进</span>
+        </div>
+        <div class="card-body"><div class="chart-container" style="max-height:340px;"><canvas id="cumulative-chart"></canvas></div></div>
+    </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// 更新单个 URL 参数
+function updateParam(key, value) {
+    var url = new URL(window.location.href);
+    url.searchParams.set(key, value);
+    window.location.href = url.toString();
+}
+
+(function() {
+    var selectedYear = {{ selected_year }};
+
+    // 图表点击处理：获取月份并打开小票
+    function chartPointClick(metric, label) {
+        return function(evt, elements) {
+            if (!elements || !elements.length) return;
+            var idx = elements[0].index;
+            var month = idx + 1; // 索引从0开始，月份从1开始
+            openReceipt(metric, label, null, {year: selectedYear, month: month});
+        };
+    }
+
+    // 月度收入统计
+    new Chart(document.getElementById('monthly-stats-chart').getContext('2d'), {
+        type: 'line',
+        data: {
+            labels: {{ monthly_stats|map(attribute='month')|list|tojson }},
+            datasets: [{
+                label: '实收',
+                data: {{ monthly_stats|map(attribute='income')|list|tojson }},
+                borderColor: '#2a78d6', backgroundColor: 'rgba(42,120,214,0.08)',
+                fill: true, tension: 0.3, pointRadius: 4, pointHoverRadius: 7, pointBackgroundColor: '#2a78d6',
+            }]
+        },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            layout: { padding: { top: 16 } },
+            onClick: chartPointClick('monthly_income', '实收明细'),
+            plugins: {
+                legend: { display: false },
+                tooltip: { callbacks: { label: function(ctx) { return '¥' + ctx.raw.toLocaleString(); } } }
+            },
+            scales: { y: { beginAtZero: true, ticks: { callback: function(v) { return (v >= 10000) ? (v/10000).toFixed(1)+'w' : (v >= 1000 ? (v/1000).toFixed(1)+'k' : v); } } } }
+        },
+        plugins: [{
+            id: 'datalabels',
+            afterDraw: function(chart) {
+                var ctx = chart.ctx;
+                chart.data.datasets.forEach(function(ds, i) {
+                    var meta = chart.getDatasetMeta(i);
+                    meta.data.forEach(function(pt, j) {
+                        var v = ds.data[j];
+                        if (v === 0) return;
+                        var label = v >= 10000 ? (v/10000).toFixed(1) + 'w' : (v >= 1000 ? (v/1000).toFixed(1) + 'k' : v);
+                        ctx.fillStyle = '#0b0b0b';
+                        ctx.font = '10px -apple-system, sans-serif';
+                        ctx.textAlign = 'center';
+                        ctx.fillText(label, pt.x, pt.y - 10);
+                    });
+                });
+            }
+        }]
+    });
+
+    // 预计收入
+    new Chart(document.getElementById('projected-chart').getContext('2d'), {
+        type: 'line',
+        data: {
+            labels: {{ monthly_projected|map(attribute='month')|list|tojson }},
+            datasets: [{
+                label: '预计',
+                data: {{ monthly_projected|map(attribute='projected')|list|tojson }},
+                borderColor: '#eda100', backgroundColor: 'rgba(237,161,0,0.08)',
+                fill: true, tension: 0.3, pointRadius: 4, pointHoverRadius: 7, pointBackgroundColor: '#eda100',
+                borderDash: [6, 3],
+            }]
+        },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            layout: { padding: { top: 16 } },
+            onClick: chartPointClick('monthly_projected', '预计收入明细'),
+            plugins: {
+                legend: { display: false },
+                tooltip: { callbacks: { label: function(ctx) { return '¥' + ctx.raw.toLocaleString(); } } }
+            },
+            scales: { y: { beginAtZero: true, ticks: { callback: function(v) { return (v >= 10000) ? (v/10000).toFixed(1)+'w' : (v >= 1000 ? (v/1000).toFixed(1)+'k' : v); } } } }
+        },
+        plugins: [{
+            id: 'datalabels',
+            afterDraw: function(chart) {
+                var ctx = chart.ctx;
+                chart.data.datasets.forEach(function(ds, i) {
+                    var meta = chart.getDatasetMeta(i);
+                    meta.data.forEach(function(pt, j) {
+                        var v = ds.data[j];
+                        if (v === 0) return;
+                        var label = v >= 10000 ? (v/10000).toFixed(1) + 'w' : (v >= 1000 ? (v/1000).toFixed(1) + 'k' : v);
+                        ctx.fillStyle = '#0b0b0b';
+                        ctx.font = '10px -apple-system, sans-serif';
+                        ctx.textAlign = 'center';
+                        ctx.fillText(label, pt.x, pt.y - 10);
+                    });
+                });
+            }
+        }]
+    });
+
+    // 年累进
+    new Chart(document.getElementById('cumulative-chart').getContext('2d'), {
+        type: 'line',
+        data: {
+            labels: {{ cumulative_income|map(attribute='month')|list|tojson }},
+            datasets: [{
+                label: '累计',
+                data: {{ cumulative_income|map(attribute='cumulative')|list|tojson }},
+                borderColor: '#008300', backgroundColor: 'rgba(0,131,0,0.08)',
+                fill: true, tension: 0.3, pointRadius: 4, pointBackgroundColor: '#008300',
+            }]
+        },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            layout: { padding: { top: 16 } },
+            plugins: {
+                legend: { display: false },
+                tooltip: { callbacks: { label: function(ctx) { return '¥' + ctx.raw.toLocaleString(); } } }
+            },
+            scales: { y: { beginAtZero: true, ticks: { callback: function(v) { return (v >= 10000) ? (v/10000).toFixed(1)+'w' : (v >= 1000 ? (v/1000).toFixed(1)+'k' : v); } } } }
+        },
+        plugins: [{
+            id: 'datalabels',
+            afterDraw: function(chart) {
+                var ctx = chart.ctx;
+                chart.data.datasets.forEach(function(ds, i) {
+                    var meta = chart.getDatasetMeta(i);
+                    meta.data.forEach(function(pt, j) {
+                        var v = ds.data[j];
+                        if (v === 0) return;
+                        var label = v >= 10000 ? (v/10000).toFixed(1) + 'w' : (v >= 1000 ? (v/1000).toFixed(1) + 'k' : v);
+                        ctx.fillStyle = '#0b0b0b';
+                        ctx.font = '10px -apple-system, sans-serif';
+                        ctx.textAlign = 'center';
+                        ctx.fillText(label, pt.x, pt.y - 10);
+                    });
+                });
+            }
+        }]
+    });
+
+    // 品类分布甜甜圈
+    var typeChart = new Chart(document.getElementById('type-chart').getContext('2d'), {
+        type: 'doughnut',
+        data: {
+            labels: {{ type_distribution|map(attribute='commission_type')|list|tojson }},
+            datasets: [{
+                data: {{ type_distribution|map(attribute='cnt')|list|tojson }},
+                gross: {{ type_distribution|map(attribute='gross')|list|tojson }},
+                net: {{ type_distribution|map(attribute='net')|list|tojson }},
+                backgroundColor: ['#2a78d6','#1baf7a','#eda100','#008300','#4a3aa7','#e34948','#e87ba4','#eb6834'],
+                borderWidth: 2, borderColor: '#fff',
+            }]
+        },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            plugins: {
+                legend: { position: 'bottom', labels: { padding: 12, usePointStyle: true, font: { size: 11 } } },
+                tooltip: { callbacks: { label: function(ctx) {
+                    var total = ctx.dataset.data.reduce(function(a,b){return a+b;},0);
+                    var d = ctx.dataset;
+                    var line = ctx.label + ': ' + ctx.raw + ' 单 (' + (total ? Math.round(ctx.raw/total*100) : 0) + '%)';
+                    return [line, '应收(毛) ¥' + (d.gross[ctx.dataIndex]||0).toFixed(0), '实收(净) ¥' + (d.net[ctx.dataIndex]||0).toFixed(0)];
+                }}}
+            }
+        }
+    });
+
+    // 月份筛选器 — AJAX 刷新品类分布
+    document.getElementById('type-month-filter').addEventListener('change', function() {
+        var month = this.value;
+        var url = '/api/income/type-distribution?year=' + selectedYear;
+        if (month) url += '&month=' + month;
+        fetch(url).then(function(r) { return r.json(); }).then(function(data) {
+            typeChart.data.labels = data.map(function(d) { return d.commission_type; });
+            typeChart.data.datasets[0].data = data.map(function(d) { return d.cnt; });
+            typeChart.data.datasets[0].gross = data.map(function(d) { return d.gross; });
+            typeChart.data.datasets[0].net = data.map(function(d) { return d.net; });
+            typeChart.update();
+        });
+    });
+
+    // Set chart heights（为数据标签预留顶部空间）
+    document.getElementById('cumulative-chart').parentElement.style.height = '350px';
+    document.getElementById('type-chart').parentElement.style.height = '280px';
+    document.getElementById('monthly-stats-chart').parentElement.style.height = '350px';
+    document.getElementById('projected-chart').parentElement.style.height = '330px';
+})();
+</script>
+{% endblock %}

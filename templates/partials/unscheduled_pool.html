@@ -1,0 +1,26 @@
+{# 未排期订单池 partial #}
+{% if unscheduled %}
+    {% for o in unscheduled %}
+    <div class="pool-card {{ o.current_stage|stage_class }}"
+         data-order-id="{{ o.id }}"
+         onclick="openEditDrawer({{ o.id }})">
+        <div class="pool-card-title">{{ o.project_name }}</div>
+        <div class="pool-card-meta">
+            <span>
+                <span class="stage-badge {{ o.current_stage|stage_class }}">
+                    {{ o.current_stage }}
+                </span>
+            </span>
+            <span class="amount">¥{{ "%.0f"|format(o.income) }}</span>
+        </div>
+        <div style="font-size:0.72rem;color:var(--color-text-tertiary);margin-top:2px;">
+            {{ o.customer_name or '未分配' }} · {{ o.source }}
+        </div>
+    </div>
+    {% endfor %}
+{% else %}
+    <div class="empty-state" style="padding:var(--space-md);">
+        <div class="empty-state-icon" style="font-size:2rem;">🎉</div>
+        <div class="empty-state-text" style="font-size:0.82rem;">所有订单已排期！</div>
+    </div>
+{% endif %}

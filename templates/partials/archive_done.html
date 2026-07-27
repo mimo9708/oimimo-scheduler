@@ -1,0 +1,10 @@
+{# 归档/取消归档成功片段（P15b）— 渲染进 #center-modal-body #}
+<div style="text-align:center;padding:24px;">
+    <div style="font-size:2rem;margin-bottom:12px;">✓</div>
+    <h2 style="margin-bottom:8px;">{{ '已归档' if order.is_archived else '已取消归档' }}</h2>
+    <p style="color:var(--color-text-secondary);margin-bottom:20px;">
+        #{{ order.id }} — {{ order.project_name }}
+        {% if order.is_archived and order.is_overdue %}<span class="status-badge overdue" style="margin-left:6px;">逾期</span>{% endif %}
+    </p>
+    <button class="btn btn-primary" onclick="closeCenterModal();location.reload();">完成</button>
+</div>

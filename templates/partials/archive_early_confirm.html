@@ -1,0 +1,14 @@
+{# 提前完成确认弹窗（P15b）— 渲染进 #center-modal-body #}
+<div style="padding:8px 4px;">
+    <h2 style="font-size:1.15rem;margin-bottom:8px;">订单提前完成确认</h2>
+    <p style="color:var(--color-text-secondary);margin-bottom:20px;line-height:1.6;">
+        当前时间早于排单开始日期（{{ order.scheduled_start }}）。<br>
+        是否确认提前完成并归档？
+    </p>
+    <div style="display:flex;gap:var(--space-sm);justify-content:flex-end;">
+        <button class="btn btn-secondary" onclick="closeCenterModal()">否（返回不记录完成状态）</button>
+        <button class="btn btn-primary"
+                hx-post="/orders/{{ order.id }}/archive?confirm=early_yes"
+                hx-target="#center-modal-body" hx-swap="innerHTML">是（按当前时间计算完成情况）</button>
+    </div>
+</div>

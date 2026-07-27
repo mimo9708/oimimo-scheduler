@@ -1,0 +1,58 @@
+{# 看板卡片 — 悬浮操作 + 颜色标识 #}
+{% set stage_border = {
+    '待开始': '#d9d9d8',
+    '色稿': '#6b8eb8',
+    '线稿': '#5b9e9e',
+    '细化': '#c49b4a',
+    '收尾': '#8b7ec8',
+    '完成': '#5b9e6b',
+    '退单': '#c4756b'
+} %}
+{% set stage_order = ['待开始', '色稿', '线稿', '细化', '收尾', '完成', '退单'] %}
+{% set cur_idx = stage_order.index(order.current_stage) if order.current_stage in stage_order else 0 %}
+{% set prev_stage = stage_order[cur_idx - 1] if cur_idx > 0 else None %}
+{% set next_stage = stage_order[cur_idx + 1] if cur_idx < stage_order|length - 1 else None %}
+{% set card_class = '' %}
+{% if order.ddl_status == '🔴逾期' %}{% set card_class = 'overdue' %}
+{% elif order.ddl_status == '即将到期' %}{% set card_class = 'due-soon' %}
+{% endif %}
+<div class="kanban-card {{ card_class }}"
+     data-order-id="{{ order.id }}"
+     data-income="{{ order.income }}"
+     data-commercial="{{ 1 if order.is_commercial else 0 }}"
+     data-overdue="{{ 1 if (order.is_overdue or order.ddl_status == '🔴逾期') else 0 }}"
+     style="border-left-color: {{ stage_border.get(order.current_stage, '#d9d9d8') }};"
+     onclick="event.stopPropagation(); openEditDrawer({{ order.id }});">
+    <!-- 悬浮操作按钮 -->
+    <div class="kanban-card-actions" onclick="event.stopPropagation();">
+        {% if prev_stage %}
+        <button class="kanban-card-action" title="移到「{{ prev_stage }}」"
+                onclick="quickStageSwitch({{ order.id }}, '{{ prev_stage }}')">◀</button>
+        {% endif %}
+        {% if next_stage %}
+        <button class="kanban-card-action" title="移到「{{ next_stage }}」"
+                onclick="quickStageSwitch({{ order.id }}, '{{ next_stage }}')">▶</button>
+        {% endif %}
+        <button class="kanban-card-action done" title="完成"
+                onclick="quickStageSwitch({{ order.id }}, '完成')">✓</button>
+    </div>
+    <div class="kanban-card-title">{{ order.project_name }}{% if order.is_overdue %} <span class="status-badge overdue" style="font-size:0.65rem;">逾期</span>{% endif %}</div>
+    <div class="kanban-card-meta">
+        <span>{{ order.customer_name or '未分配' }}</span>
+        <span class="kanban-card-amount">¥{{ "%.0f"|format(order.income) }}</span>
+    </div>
+    {% if order.ddl_status == '🔴逾期' %}
+    <div style="margin-top:4px;">
+        <span class="status-badge overdue">逾期</span>
+    </div>
+    {% elif order.ddl_status == '即将到期' %}
+    <div style="margin-top:4px;">
+        <span class="status-badge due-soon">即将到期</span>
+    </div>
+    {% endif %}
+    {% if order.scheduled_end %}
+    <div style="font-size:0.7rem;color:var(--color-text-tertiary);margin-top:3px;">
+        {{ order.scheduled_end }}
+    </div>
+    {% endif %}
+</div>

@@ -1,0 +1,90 @@
+{# 模板管理 — 新建/编辑模板表单（渲染进 #tpl-mgr-list，独立于订单，不写 orders 表） #}
+{% set d = (tpl.data if tpl else {}) or {} %}
+<form hx-post="{{ '/orders/templates' if is_new else '/orders/templates/' ~ tpl.id }}"
+      hx-target="#tpl-mgr-list" hx-swap="innerHTML"
+      style="display:flex;flex-direction:column;gap:var(--space-sm);">
+    <div class="form-group">
+        <label for="tpl-name">模板名称 *</label>
+        <input type="text" name="name" id="tpl-name" required
+               value="{{ tpl.name if tpl else '' }}" placeholder="如：米画师标准约稿">
+    </div>
+    <div class="form-row">
+        <div class="form-group">
+            <label>客户</label>
+            <select name="customer_id">
+                <option value="">— 不指定 —</option>
+                {% for c in customers %}
+                <option value="{{ c.id }}" {% if d.customer_id|string == c.id|string %}selected{% endif %}>{{ c.name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="form-group">
+            <label>项目名称</label>
+            <input type="text" name="project_name" value="{{ d.project_name or '' }}" placeholder="如：罗马大浴场双人">
+        </div>
+    </div>
+    <div class="form-row">
+        <div class="form-group">
+            <label>来源</label>
+            <input type="text" name="source" list="tpl-source-list" value="{{ d.source or '' }}" autocomplete="off">
+            <datalist id="tpl-source-list">{% for s in SOURCE_CHOICES %}<option value="{{ s }}">{% endfor %}</datalist>
+        </div>
+        <div class="form-group">
+            <label>稿件类别</label>
+            <input type="text" name="commission_type" list="tpl-type-list" value="{{ d.commission_type or '' }}" autocomplete="off">
+            <datalist id="tpl-type-list">{% for t in COMMISSION_TYPE_CHOICES %}<option value="{{ t }}">{% endfor %}</datalist>
+        </div>
+    </div>
+    <div class="form-row">
+        <div class="form-group">
+            <label>用途</label>
+            <select name="is_commercial">
+                <option value="0" {% if d.is_commercial|string != '1' %}selected{% endif %}>私用</option>
+                <option value="1" {% if d.is_commercial|string == '1' %}selected{% endif %}>商用</option>
+            </select>
+        </div>
+        <div class="form-group">
+            <label>阶段</label>
+            <select name="current_stage">
+                {% for s in STAGE_CHOICES %}
+                <option value="{{ s }}" {% if s == (d.current_stage or '待开始') %}selected{% endif %}>{{ s }}</option>
+                {% endfor %}
+            </select>
+        </div>
+    </div>
+    <div class="form-group">
+        <label>收款</label>
+        <select name="payment_status">
+            {% for s in PAYMENT_CHOICES %}
+            <option value="{{ s }}" {% if s == (d.payment_status or '未收款') %}selected{% endif %}>{{ s }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    <div class="form-group">
+        <label>原订单链接</label>
+        <input type="url" name="platform_url" value="{{ d.platform_url or '' }}" placeholder="https://...">
+    </div>
+    <div class="form-row">
+        <div class="form-group">
+            <label>定金 (¥)</label>
+            <input type="number" name="deposit" step="0.01" min="0" value="{{ d.deposit or '' }}">
+        </div>
+        <div class="form-group">
+            <label>尾款 (¥)</label>
+            <input type="number" name="balance" step="0.01" min="0" value="{{ d.balance or '' }}">
+        </div>
+        <div class="form-group">
+            <label>手续费 (%)</label>
+            <input type="number" name="platform_fee_pct" step="0.1" min="0" max="100" value="{{ d.platform_fee_pct or '' }}">
+        </div>
+    </div>
+    <div class="form-group">
+        <label>备注</label>
+        <textarea name="notes" rows="2">{{ d.notes or '' }}</textarea>
+    </div>
+    <div style="display:flex;justify-content:flex-end;gap:8px;padding-top:var(--space-sm);border-top:1px solid var(--color-border);">
+        <button type="submit" class="btn btn-primary">{{ '创建模板' if is_new else '保存修改' }}</button>
+        <button type="button" class="btn btn-ghost"
+                hx-get="/orders/templates/list" hx-target="#tpl-mgr-list" hx-swap="innerHTML">取消</button>
+    </div>
+</form>

@@ -1,0 +1,16 @@
+{# 模板管理 — 居中模态框外壳（侧边栏「模板管理」入口） #}
+<div style="display:flex;flex-direction:column;gap:var(--space-md);">
+    <div style="font-size:0.82rem;color:var(--color-text-tertiary);">
+        管理已保存的订单模板。模板独立于订单，可新建、编辑、删除，或用模板快速新建订单。
+    </div>
+
+    <div id="tpl-mgr-list">
+        {% include 'orders/templates_list.html' %}
+    </div>
+
+    <div style="display:flex;justify-content:flex-end;gap:8px;padding-top:var(--space-sm);border-top:1px solid var(--color-border);">
+        <button type="button" class="btn btn-primary"
+                hx-get="/orders/templates/new" hx-target="#tpl-mgr-list" hx-swap="innerHTML">+ 新建模板</button>
+        <button type="button" class="btn btn-ghost" onclick="closeCenterModal()">关闭</button>
+    </div>
+</div>

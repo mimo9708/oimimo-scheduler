@@ -1,0 +1,15 @@
+{# 逾期归档确认弹窗（P15b/P18-F7）— 渲染进 #center-modal-body #}
+<div style="padding:8px 4px;">
+    <h2 style="font-size:1.15rem;margin-bottom:8px;">归档确认</h2>
+    <p style="color:var(--color-text-secondary);margin-bottom:16px;line-height:1.6;">
+        完成的时间大于原订单排期的时间（排期截止：{{ order.scheduled_end }}），是否保存？
+    </p>
+    <div style="display:flex;flex-direction:column;gap:var(--space-sm);">
+        <button class="btn btn-primary"
+                hx-post="/orders/{{ order.id }}/archive?confirm=overdue_yes"
+                hx-target="#center-modal-body" hx-swap="innerHTML">是，按排期时间归档</button>
+        {# P19-F13：「否」= 关闭弹窗并返回编辑页继续修改截止日期；已在编辑页只关弹窗 #}
+        <button class="btn btn-secondary"
+                onclick="closeCenterModal(); if (!/^\/orders\/\d+\/edit$/.test(location.pathname)) location.href = '/orders/{{ order.id }}/edit';">否，返回修改截止日期</button>
+    </div>
+</div>

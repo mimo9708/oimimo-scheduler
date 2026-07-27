@@ -1,0 +1,10 @@
+{# 客户下拉选择器 — 用于快速创建客户后刷新选项 #}
+<select name="customer_id" id="customer_id">
+    <option value="">— 选择客户 —</option>
+    {% for c in customers %}
+    <option value="{{ c.id }}"
+        {% if (selected_id and selected_id == c.id) or (order and order.customer_id == c.id) %}selected{% endif %}>
+        {{ c.name }}
+    </option>
+    {% endfor %}
+</select>

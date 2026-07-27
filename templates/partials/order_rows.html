@@ -1,0 +1,15 @@
+{# 订单表格行 partial — 用于 HTMX 筛选刷新 #}
+{% if orders %}
+    {% for o in orders %}
+    {% include "partials/order_row.html" %}
+    {% endfor %}
+{% else %}
+<tr>
+    <td colspan="14">
+        <div class="empty-state">
+            <div class="empty-state-icon">📋</div>
+            <div class="empty-state-text">没有匹配的订单</div>
+        </div>
+    </td>
+</tr>
+{% endif %}

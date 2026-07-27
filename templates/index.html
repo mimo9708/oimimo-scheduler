@@ -1,0 +1,591 @@
+{% extends "base.html" %}
+{% block title %}主页 — oimimo scheduler{% endblock %}
+
+{% block head_extra %}
+    <!-- Frappe Gantt（仅主页甘特图） -->
+    <script src="{{ url_for('static', filename='vendor/frappe-gantt.min.js') }}"></script>
+    <link rel="stylesheet" href="{{ url_for('static', filename='vendor/frappe-gantt.min.css') }}">
+{% endblock %}
+
+{% block content %}
+<div class="dashboard">
+
+    <div class="page-header">
+        <div>
+            <h1 class="page-title" style="margin:0;">主页</h1>
+        </div>
+        <div style="display:flex;align-items:center;gap:var(--space-sm);">
+            <!-- 统计时间范围 — 最小化按钮 -->
+            <button class="btn btn-sm btn-secondary" id="stats-filter-btn" onclick="toggleStatsFilter()" title="统计时间范围">
+                 <span id="stats-range-label-compact">{% set r = stats %}本月</span> ▾
+            </button>
+            <!-- P16h 模块设置入口 -->
+            <div class="module-settings-wrap">
+                <button class="btn btn-sm btn-secondary" id="module-settings-btn" onclick="toggleModuleSettings()" title="自定义显示模块"> 模块</button>
+                <div class="module-settings-panel" id="module-settings-panel"></div>
+            </div>
+            <a href="#" onclick="openCenterModal();return false;" class="btn btn-primary">+ 新建订单</a>
+        </div>
+    </div>
+
+    <!-- 统计时间范围 — 展开的筛选面板（默认隐藏） -->
+    <div class="stats-filter-panel" id="stats-filter-panel" style="display:none;margin-bottom:var(--space-md);">
+        <div class="card"><div class="card-body" style="padding:10px 16px;">
+            <div style="display:flex;align-items:center;gap:var(--space-sm);flex-wrap:wrap;">
+                <span style="font-size:0.82rem;font-weight:600;color:var(--color-text-secondary);white-space:nowrap;">统计范围</span>
+                <!-- P13b C1：预设按钮组 → tabs 分段组件 -->
+                <div class="stats-tabs" id="stats-presets">
+                    <button class="stats-preset stats-tab active" data-preset="month">本月</button>
+                    <button class="stats-preset stats-tab" data-preset="quarter">本季度</button>
+                    <button class="stats-preset stats-tab" data-preset="year">本年</button>
+                    <button class="stats-preset stats-tab" data-preset="all">全部</button>
+                    <button class="stats-preset stats-tab" data-preset="custom" id="preset-custom-btn">自定义</button>
+                </div>
+                <span style="color:var(--color-border);margin:0 2px;">|</span>
+                <div id="stats-custom-range" style="display:none;align-items:center;gap:6px;">
+                    <input type="date" id="stats-date-from" style="padding:5px 8px;border:1px solid var(--color-border);border-radius:var(--radius-sm);font-size:0.82rem;background:var(--color-surface);">
+                    <span style="font-size:0.82rem;color:var(--color-text-tertiary);">→</span>
+                    <input type="date" id="stats-date-to" style="padding:5px 8px;border:1px solid var(--color-border);border-radius:var(--radius-sm);font-size:0.82rem;background:var(--color-surface);">
+                    <button class="btn btn-sm btn-primary" id="apply-custom-range" onclick="applyCustomStatsRange()">应用</button>
+                </div>
+            </div>
+        </div></div>
+    </div>
+
+    <!-- 统计卡片 -->
+    <div data-module="stats-cards" data-module-title="统计卡片">
+        <div id="stats-cards">
+            {% include "partials/stats_cards.html" %}
+        </div>
+    </div>
+
+    <!-- 甘特图 -->
+    <div class="card gantt-section" data-module="gantt" data-module-title="项目时间线（甘特图）">
+        <div class="card-header">
+            <span>项目时间线</span>
+            <div style="display:flex;align-items:center;gap:var(--space-md);">
+                <button class="btn btn-sm btn-secondary" id="gantt-filter-btn" onclick="toggleGanttFilter()" title="切换显示全部/仅进行中">
+                    显示全部
+                </button>
+                <span style="font-size:0.8rem;color:var(--color-text-secondary);" id="gantt-count">
+                    共 {{ gantt_orders|length }} 条排期
+                </span>
+                <div class="gantt-toolbar" id="gantt-toolbar">
+                    <button data-view="Day">日</button>
+                    <button data-view="Week">周</button>
+                    <button data-view="Month" class="active">月</button>
+                    <button data-view="Year">年</button>
+                </div>
+                <button class="btn btn-sm btn-secondary" id="gantt-today-btn" title="定位到今天">定位今天</button>
+            </div>
+        </div>
+        <div class="card-body" style="padding:8px;">
+            <div class="gantt-scroll-wrap" id="gantt-scroll-wrap" style="max-height:400px;overflow-y:auto;">
+                <div id="gantt-chart"></div>
+            </div>
+            <!-- P13b B2：外置横向滚动条（与甘特内容 scrollLeft 双向同步） -->
+            <div class="gantt-hscroll" id="gantt-hscroll"><div id="gantt-hscroll-inner"></div></div>
+            <script id="gantt-data" type="application/json">{{ gantt_orders|tojson|safe }}</script>
+        </div>
+    </div>
+
+    <!-- 本周排单 + 逾期提醒 -->
+    <div class="table-panels" data-module="tables" data-module-title="本周排单 / 逾期订单">
+        <div class="card">
+            <div class="card-header">本周排单</div>
+            <div class="card-body" style="padding:0;">
+                {% if week_orders %}
+                <div class="table-container">
+                    <table>
+                        <thead><tr><th>客户</th><th>项目</th><th>阶段</th><th>DDL</th><th>金额</th><th>状态</th></tr></thead>
+                        <tbody>
+                            {% for o in week_orders %}
+                            <tr style="cursor:pointer" onclick="openEditDrawer({{ o.id }})">
+                                <td>{{ o.customer_name or '-' }}</td>
+                                <td><strong>{{ o.project_name }}</strong></td>
+                                <td><span class="stage-badge {{ o.current_stage|stage_class }}">{{ o.current_stage }}</span></td>
+                                <td>{{ o.scheduled_end or '-' }}</td>
+                                <td><span class="amount">¥{{ "%.0f"|format(o.income) }}</span></td>
+                                <td>
+                                    {% if o.is_archived %}<span style="color:var(--color-text-tertiary);font-size:0.75rem;">已归档</span>
+                                    {% elif o.ddl_status == '🔴逾期' %}<span class="status-badge overdue">逾期</span>
+                                    {% elif o.ddl_status == '即将到期' %}<span class="status-badge due-soon">即将到期</span>
+                                    {% else %}<span class="status-badge normal">正常</span>{% endif %}
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}<div class="empty-state"><div class="empty-state-text">本周暂无排单</div></div>{% endif %}
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header">逾期订单</div>
+            <div class="card-body" style="padding:0;">
+                {% if overdue_orders %}
+                <div class="table-container">
+                    <table>
+                        <thead><tr><th>客户</th><th>项目</th><th>阶段</th><th>截止日</th><th>金额</th></tr></thead>
+                        <tbody>
+                            {% for o in overdue_orders %}
+                            <tr style="cursor:pointer" onclick="openEditDrawer({{ o.id }})">
+                                <td>{{ o.customer_name or '-' }}</td>
+                                <td><strong>{{ o.project_name }}</strong></td>
+                                <td><span class="stage-badge {{ o.current_stage|stage_class }}">{{ o.current_stage }}</span></td>
+                                <td style="color:var(--color-danger);font-weight:600;">{{ o.scheduled_end or '-' }}</td>
+                                <td><span class="amount">¥{{ "%.0f"|format(o.income) }}</span></td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}<div class="empty-state"><div class="empty-state-text">没有逾期订单</div></div>{% endif %}
+            </div>
+        </div>
+    </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+/* ═══════════════════════════════════════════════════════════
+   统计时间范围筛选（折叠式）
+   ═══════════════════════════════════════════════════════════ */
+(function() {
+    var currentPreset = 'month';  // 默认本月
+    var isExpanded = false;
+
+    function initStatsRange() {
+        // 从 localStorage 恢复
+        try {
+            var saved = localStorage.getItem('stats-range');
+            if (saved) {
+                var parsed = JSON.parse(saved);
+                if (parsed.preset) currentPreset = parsed.preset;
+            }
+        } catch(e) {}
+        // 自定义范围的起止未持久化，恢复时回落到本月，避免加载出空区间
+        if (currentPreset === 'custom') currentPreset = 'month';
+        applyPreset(currentPreset);
+        bindPresetButtons();
+        bindCustomDates();
+    }
+
+    // ── 展开/折叠 ──
+    window.toggleStatsFilter = function() {
+        isExpanded = !isExpanded;
+        var panel = document.getElementById('stats-filter-panel');
+        var btn = document.getElementById('stats-filter-btn');
+        if (isExpanded) {
+            panel.style.display = '';
+            if (btn) btn.classList.add('active');
+        } else {
+            panel.style.display = 'none';
+            if (btn) btn.classList.remove('active');
+        }
+    };
+
+    // 自动折叠（选择完后调用）
+    function collapseStatsFilter() {
+        if (!isExpanded) return;
+        isExpanded = false;
+        var panel = document.getElementById('stats-filter-panel');
+        var btn = document.getElementById('stats-filter-btn');
+        panel.style.display = 'none';
+        if (btn) btn.classList.remove('active');
+    }
+
+    function bindPresetButtons() {
+        document.querySelectorAll('#stats-presets .stats-preset').forEach(function(btn) {
+            btn.addEventListener('click', function() {
+                currentPreset = this.dataset.preset;
+                if (currentPreset === 'custom') {
+                    // 自定义：仅展开日期起止输入，待用户点「应用」后再刷新（此时不折叠面板）
+                    updatePresetUI();
+                    return;
+                }
+                applyPreset(currentPreset);
+                savePreference();
+                collapseStatsFilter();  // 选完自动折叠
+            });
+        });
+    }
+
+    function bindCustomDates() {
+        var fromEl = document.getElementById('stats-date-from');
+        var toEl = document.getElementById('stats-date-to');
+        if (!fromEl || !toEl) return;
+        fromEl.addEventListener('change', function() {
+            if (this.value || toEl.value) {
+                currentPreset = 'custom';
+                updatePresetUI();
+            }
+        });
+        toEl.addEventListener('change', function() {
+            if (this.value || fromEl.value) {
+                currentPreset = 'custom';
+                updatePresetUI();
+            }
+        });
+    }
+
+    function applyPreset(preset) {
+        updatePresetUI();
+        var range = getDateRange(preset);
+        refreshStats(range.from, range.to);
+        updateRangeLabel(preset, range);
+    }
+
+    window.applyCustomStatsRange = function() {
+        var from = document.getElementById('stats-date-from').value;
+        var to = document.getElementById('stats-date-to').value;
+        // 校验：起止必须都填，且开始 ≤ 结束
+        if (!from || !to) { alert('请选择开始和结束日期'); return; }
+        if (from > to) { alert('开始日期不能晚于结束日期'); return; }
+        currentPreset = 'custom';
+        updatePresetUI();
+        refreshStats(from, to);
+        updateRangeLabel('custom', {from: from, to: to});
+        savePreference();
+        collapseStatsFilter();  // 应用后自动折叠
+    };
+
+    function getDateRange(preset) {
+        var now = new Date();
+        var from = null, to = null;
+        switch (preset) {
+            case 'month':
+                from = new Date(now.getFullYear(), now.getMonth(), 1);
+                to = new Date(now.getFullYear(), now.getMonth() + 1, 0);  // 月末
+                break;
+            case 'quarter':
+                var q = Math.floor(now.getMonth() / 3);
+                from = new Date(now.getFullYear(), q * 3, 1);
+                to = new Date(now.getFullYear(), q * 3 + 3, 0);  // 季末
+                break;
+            case 'year':
+                from = new Date(now.getFullYear(), 0, 1);
+                to = new Date(now.getFullYear(), 11, 31);  // 年末
+                break;
+            case 'all':
+                from = null; to = null;
+                break;
+            case 'custom':
+                from = document.getElementById('stats-date-from').value || null;
+                to = document.getElementById('stats-date-to').value || null;
+                break;
+        }
+        return {
+            from: from ? fmtDate(from) : null,
+            to: to ? fmtDate(to) : null
+        };
+    }
+
+    function fmtDate(d) {
+        if (typeof d === 'string') return d;
+        return d.getFullYear() + '-' +
+            String(d.getMonth() + 1).padStart(2, '0') + '-' +
+            String(d.getDate()).padStart(2, '0');
+    }
+
+    function updatePresetUI() {
+        // 「自定义」tab 常驻可见，仅切换高亮；日期起止输入随自定义激活显隐
+        document.querySelectorAll('.stats-preset').forEach(function(b) {
+            b.classList.toggle('active', b.dataset.preset === currentPreset);
+        });
+        var customDiv = document.getElementById('stats-custom-range');
+        if (customDiv) {
+            customDiv.style.display = currentPreset === 'custom' ? 'flex' : 'none';
+        }
+    }
+
+    function refreshStats(from, to) {
+        var params = 'preset=' + encodeURIComponent(currentPreset);
+        if (from) params += '&from=' + encodeURIComponent(from);
+        if (to) params += '&to=' + encodeURIComponent(to);
+        var url = '/api/stats?' + params;
+        htmx.ajax('GET', url, { target: '#stats-cards' });
+    }
+
+    function updateRangeLabel(preset, range) {
+        var compactLabel = document.getElementById('stats-range-label-compact');
+        if (compactLabel) {
+            switch (preset) {
+                case 'month':
+                    compactLabel.textContent = '本月';
+                    break;
+                case 'quarter':
+                    compactLabel.textContent = '本季度';
+                    break;
+                case 'year':
+                    compactLabel.textContent = '本年';
+                    break;
+                case 'all':
+                    compactLabel.textContent = '全部';
+                    break;
+                case 'custom':
+                    compactLabel.textContent = (range.from || '…') + ' → ' + (range.to || '…');
+                    break;
+            }
+        }
+    }
+
+    function savePreference() {
+        try {
+            localStorage.setItem('stats-range', JSON.stringify({ preset: currentPreset }));
+        } catch(e) {}
+    }
+
+    // 初始化
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', initStatsRange);
+    } else {
+        initStatsRange();
+    }
+})();
+</script>
+
+<script>
+(function() {
+    var el = document.getElementById('gantt-data');
+    if (!el) return;
+    var ganttFullData = JSON.parse(el.textContent || '[]');
+    if (!ganttFullData.length) {
+        document.getElementById('gantt-chart').innerHTML = '<div class="empty-state"><div class="empty-state-text">暂无排期数据</div></div>';
+        return;
+    }
+
+    var w = window.innerWidth;
+    var defaultView = w < 768 ? 'Week' : 'Month';
+    // 默认「仅进行中」：只显示 custom_class 不含 stage-completed / stage-cancelled 的订单，
+    // 避免全量（含已归档完成/退单/未开始）在时间轴上按开始日排序堆叠、可视区被早期归档条挤空。
+    // 用户可点「显示全部」切回全量。
+    var filterActive = true;
+    var currentView = defaultView;
+
+    // 筛选：进行中 = custom_class 不含 "stage-completed" 且不含 "stage-cancelled"
+    function filterGanttData(data) {
+        if (!filterActive) return data;
+        return data.filter(function(d) {
+            var cls = d.custom_class || '';
+            return cls.indexOf('stage-completed') === -1 && cls.indexOf('stage-cancelled') === -1;
+        });
+    }
+
+    function buildGantt(viewMode) {
+        currentView = viewMode;
+        var filtered = filterGanttData(ganttFullData);
+        document.getElementById('gantt-chart').innerHTML = '';
+        document.getElementById('gantt-count').textContent = '共 ' + filtered.length + ' 条排期';
+        if (!filtered.length) {
+            document.getElementById('gantt-chart').innerHTML = '<div class="empty-state"><div class="empty-state-text">暂无匹配排期</div></div>';
+            return;
+        }
+        // 紧凑模式：bar_height 更小；P13b B1：custom_popup_html 含「查看订单」链接
+        window._gantt = new Gantt("#gantt-chart", filtered, {
+            view_mode: viewMode, date_format: 'YYYY-MM-DD',
+            bar_height: 22, bar_corner_radius: 4, padding: 12,
+            language: 'zh',
+            custom_popup_html: function(task) {
+                return '<div class="gantt-popup">'
+                    + '<div class="gp-title">' + escHtml(task.name) + '</div>'
+                    + '<div class="gp-meta">' + escHtml(task.start) + ' → ' + escHtml(task.end)
+                    + ' · 进度 ' + (task.progress || 0) + '%</div>'
+                    + '<a class="gp-link" href="/orders/' + encodeURIComponent(task.id) + '">查看订单 →</a>'
+                    + '</div>';
+            },
+            on_click: function(task) {
+                openOrderModal(task.id);
+            },
+            on_date_change: function(task, start, end) {
+                dirtyFetch('/orders/' + task.id + '/reschedule', {
+                    method: 'POST', headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({start: start, end: end})
+                }).then(function() { showToast('排期已更新', 'success'); });
+            }
+        });
+        setupGanttHScroll();
+        injectTodayMarker();
+        requestAnimationFrame(scrollGanttToToday);
+    }
+
+    // 供外部（编辑/新建保存后）刷新甘特：重新拉取数据并按当前视图 + 筛选重建
+    window.refreshGanttData = function() {
+        return fetch('/api/orders/gantt-data')
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                ganttFullData = Array.isArray(data) ? data : [];
+                buildGantt(currentView);
+            })
+            .catch(function() {});
+    };
+
+    /* P13b B2：外置横向滚动条 — 与甘特内容 scrollLeft 双向同步 */
+    var ganttScroller = null;
+
+    function bindGanttHScrollOnce() {
+        var hscroll = document.getElementById('gantt-hscroll');
+        if (!hscroll || hscroll._bound) return;
+        hscroll._bound = true;
+        var syncing = false;
+        hscroll.addEventListener('scroll', function() {
+            if (syncing || !ganttScroller) return;
+            syncing = true;
+            ganttScroller.scrollLeft = hscroll.scrollLeft;
+            syncing = false;
+        });
+        window._bindGanttContentScroll = function(scroller) {
+            scroller.addEventListener('scroll', function() {
+                if (syncing) return;
+                syncing = true;
+                hscroll.scrollLeft = scroller.scrollLeft;
+                syncing = false;
+            });
+        };
+    }
+
+    function setupGanttHScroll() {
+        var wrap = document.getElementById('gantt-scroll-wrap');
+        var inner = document.getElementById('gantt-hscroll-inner');
+        if (!wrap || !inner) return;
+        bindGanttHScrollOnce();
+        ganttScroller = wrap.querySelector('.gantt-container') || wrap;
+        inner.style.width = ganttScroller.scrollWidth + 'px';
+        if (window._bindGanttContentScroll) window._bindGanttContentScroll(ganttScroller);
+    }
+
+    window.addEventListener('resize', function() {
+        var inner = document.getElementById('gantt-hscroll-inner');
+        if (inner && ganttScroller) inner.style.width = ganttScroller.scrollWidth + 'px';
+    });
+
+    // 筛选切换
+    window.toggleGanttFilter = function() {
+        filterActive = !filterActive;
+        var btn = document.getElementById('gantt-filter-btn');
+        // 按钮文本显示「点击后的操作」：filterActive 时显示「显示全部」（点击可查看全部），反之显示「仅进行中」
+        btn.textContent = filterActive ? '显示全部' : '仅进行中';
+        buildGantt(currentView);
+    };
+
+    // 初始同步筛选按钮文案（文案表示「点击后的操作」）
+    var _filterBtn = document.getElementById('gantt-filter-btn');
+    if (_filterBtn) _filterBtn.textContent = filterActive ? '显示全部' : '仅进行中';
+
+    buildGantt(defaultView);
+
+    document.querySelectorAll('#gantt-toolbar button[data-view]').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            document.querySelectorAll('#gantt-toolbar button[data-view]').forEach(function(b) { b.classList.remove('active'); });
+            this.classList.add('active');
+            buildGantt(this.dataset.view);
+        });
+    });
+
+    /* 今日的精确像素 x：直接用 frappe 实例的 gantt_start / column_width / step 推算（单位 = hour）
+     * 这与 frappe 绘制 bar 的公式一致，日/周/月视图均精确（尤其周视图：不再取整周 band 中心） */
+    function computeTodayX() {
+        var g = window._gantt;
+        if (g && g.gantt_start && g.options && g.options.column_width && g.options.step) {
+            var hours = (Date.now() - new Date(g.gantt_start).getTime()) / 3600000;
+            return (hours / g.options.step) * g.options.column_width;
+        }
+        // 降级：取今日高亮 band 中心
+        if (ganttScroller) {
+            var hl = ganttScroller.querySelector('.today-highlight');
+            if (hl) {
+                var x = parseFloat(hl.getAttribute('x')) || 0;
+                var wid = parseFloat(hl.getAttribute('width')) || 0;
+                return x + wid / 2;
+            }
+        }
+        return null;
+    }
+
+    /* 向 SVG 注入醒目的今日标记：贯穿网格的竖线 + 顶部圆标（含日期数字），颜色随主题 */
+    function injectTodayMarker() {
+        var chart = document.getElementById('gantt-chart');
+        var svg = chart && chart.querySelector('svg');
+        if (!svg) return;
+        var prev = svg.querySelector('.gantt-today-group');
+        if (prev && prev.parentNode) prev.parentNode.removeChild(prev);
+        var x = computeTodayX();
+        if (x == null) return;
+        var svgW = parseFloat(svg.getAttribute('width')) || svg.getBoundingClientRect().width || 0;
+        var svgH = parseFloat(svg.getAttribute('height')) || svg.getBoundingClientRect().height || 0;
+        // 今日不在图表日期范围内则不绘制
+        if (x < 0 || (svgW && x > svgW)) return;
+        var NS = 'http://www.w3.org/2000/svg';
+        var g = document.createElementNS(NS, 'g');
+        g.setAttribute('class', 'gantt-today-group');
+        var line = document.createElementNS(NS, 'line');
+        line.setAttribute('class', 'gantt-today-line');
+        line.setAttribute('x1', x); line.setAttribute('x2', x);
+        line.setAttribute('y1', 24); line.setAttribute('y2', svgH);
+        g.appendChild(line);
+        var pillW = 34, pillH = 20, pillY = 3;
+        var rect = document.createElementNS(NS, 'rect');
+        rect.setAttribute('class', 'gantt-today-pill');
+        rect.setAttribute('x', x - pillW / 2); rect.setAttribute('y', pillY);
+        rect.setAttribute('width', pillW); rect.setAttribute('height', pillH);
+        rect.setAttribute('rx', 9); rect.setAttribute('ry', 9);
+        g.appendChild(rect);
+        var label = document.createElementNS(NS, 'text');
+        label.setAttribute('class', 'gantt-today-pill-label');
+        label.setAttribute('x', x); label.setAttribute('y', pillY + pillH / 2 + 1);
+        label.textContent = new Date().getDate();
+        g.appendChild(label);
+        svg.appendChild(g);
+    }
+
+    /* 定位到今天 — 横向滚动使今日居中（基于精确像素 x，日/周/月均准确） */
+    function scrollGanttToToday() {
+        if (!ganttScroller) return;
+        var vw = ganttScroller.clientWidth || 0;
+        var x = computeTodayX();
+        if (x == null) {
+            ganttScroller.scrollLeft = Math.max(0, (ganttScroller.scrollWidth - vw) / 2);
+        } else {
+            ganttScroller.scrollLeft = Math.max(0, x - vw / 2);
+        }
+        var hscroll = document.getElementById('gantt-hscroll');
+        if (hscroll) hscroll.scrollLeft = ganttScroller.scrollLeft;
+    }
+    var todayBtn = document.getElementById('gantt-today-btn');
+    if (todayBtn) todayBtn.addEventListener('click', scrollGanttToToday);
+})();
+</script>
+
+<script>
+/* 主页数据同步：在抽屉/模态框编辑保存后，无需整页刷新即可刷新
+   本周排单 / 逾期订单表格与甘特图（修复“保存后信息不实时更新”）。
+   由 app.js 的 refreshCurrentView()（编辑抽屉关闭时）与 closeCenterModal()（模态框关闭时）调用。 */
+(function() {
+    // 重拉主页两个表格（本周排单 / 逾期订单）：拉 / 提取 .table-panels 替换
+    window.refreshDashboardTables = function() {
+        var cur = document.querySelector('.table-panels');
+        if (!cur) return Promise.resolve();
+        return fetch(window.location.pathname + window.location.search, { headers: { 'X-Requested-With': 'fetch' } })
+            .then(function(r) { return r.text(); })
+            .then(function(html) {
+                var doc = new DOMParser().parseFromString(html, 'text/html');
+                var fresh = doc.querySelector('.table-panels');
+                if (fresh) {
+                    cur.innerHTML = fresh.innerHTML;
+                    if (window.lucide && lucide.createIcons) lucide.createIcons();
+                }
+            })
+            .catch(function() {});
+    };
+
+    // 一键刷新主页数据（甘特图 + 表格）
+    window.refreshDashboardData = function() {
+        if (typeof window.refreshGanttData === 'function') window.refreshGanttData();
+        if (typeof window.refreshDashboardTables === 'function') window.refreshDashboardTables();
+    };
+})();
+</script>
+{% endblock %}

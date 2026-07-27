@@ -1,0 +1,274 @@
+{# 内联编辑表单（抽屉中用） — 不继承 base.html #}
+<div class="form-container" style="max-width:100%;">
+    <form hx-post="/orders/{{ order.id }}/edit"
+          hx-target="#drawer-body"
+          hx-swap="innerHTML"
+          id="inline-form">
+
+        <input type="hidden" name="inline" value="1">
+
+        <!-- 原订单链接 -->
+        <div class="form-group" style="margin-bottom:12px;">
+            <label>原订单链接</label>
+            <input type="url" name="platform_url" value="{{ order.platform_url or '' }}"
+                   placeholder="https://..."
+                   style="font-size:0.85rem;"
+>
+            {% if order.platform_url %}
+            <a href="{{ order.platform_url }}" target="_blank" style="font-size:0.75rem;color:var(--color-link);">打开原页面 ↗</a>
+            {% endif %}
+        </div>
+
+        <!-- 日历颜色 — 原生滑动面板选色器 -->
+        <div class="form-group" style="margin-bottom:12px;">
+            <div style="display:flex;align-items:center;gap:8px;">
+                <span class="color-dot-label">日历颜色</span>
+                <div class="cp-trigger" id="color-dot-trigger"
+                     data-hex="{{ order.custom_color or '#b0b0aa' }}"
+                     data-order-id="{{ order.id }}"
+                     style="background:{{ order.custom_color or '#b0b0aa' }};"
+                     title="点击设置日历中的颜色"></div>
+                <input type="hidden" id="custom-color-value" value="{{ order.custom_color or '' }}">
+                <button type="button" class="btn btn-ghost btn-sm color-dot-clear" id="color-dot-clear"
+                        onclick="clearCustomColor({{ order.id }})"
+                        style="display:{{ 'inline-flex' if order.custom_color else 'none' }};"
+                        title="恢复自动着色">✕</button>
+            </div>
+        </div>
+
+        <!-- 客户 -->
+        <div class="form-group">
+            <label>
+                客户
+                <button type="button" class="btn btn-ghost btn-sm" style="font-size:0.72rem;margin-left:6px;color:var(--color-primary);"
+                        onclick="var f=document.getElementById('quick-cust-inline');f.classList.toggle('hidden');if(!f.classList.contains('hidden'))document.getElementById('quick-name-inline').focus();">
+                    + 新建
+                </button>
+            </label>
+            <div id="customer-select-wrapper-inline">
+                <select name="customer_id">
+                    <option value="">— 选择客户 —</option>
+                    {% for c in customers %}
+                    <option value="{{ c.id }}" {% if order.customer_id == c.id %}selected{% endif %}>{{ c.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div id="quick-cust-inline" class="hidden" style="margin-top:6px;padding:10px;background:var(--color-bg);border-radius:var(--radius-sm);border:1px solid var(--color-border);">
+                <div style="display:flex;gap:6px;">
+                    <input type="text" name="quick_name" id="quick-name-inline" placeholder="客户名称 *"
+                           style="flex:1;padding:6px 8px;border:1px solid var(--color-border);border-radius:var(--radius-sm);font-size:0.82rem;">
+                    <button type="button" class="btn btn-primary btn-sm"
+                            hx-post="/api/customers/quick"
+                            hx-target="#customer-select-wrapper-inline"
+                            hx-include="#quick-name-inline"
+                            hx-swap="innerHTML"
+                            hx-on:htmx:after-request="document.getElementById('quick-cust-inline').classList.add('hidden')">
+                        创建
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 项目名称 -->
+        <div class="form-group">
+            <label>项目名称 *</label>
+            <input type="text" name="project_name" required value="{{ order.project_name }}">
+        </div>
+
+        <!-- 来源 + 阶段 -->
+        <div class="form-row">
+            <div class="form-group">
+                <label>来源</label>
+                <input type="text" name="source"
+                       list="source-list-inline"
+                       value="{{ order.source }}"
+                       placeholder="输入或选择..."
+                       autocomplete="off">
+                <datalist id="source-list-inline">
+                    {% for s in existing_sources %}
+                    <option value="{{ s }}">
+                    {% endfor %}
+                </datalist>
+            </div>
+            <div class="form-group">
+                <label>当前阶段</label>
+                <select name="current_stage">
+                    {% for s in STAGE_CHOICES %}
+                    <option value="{{ s }}" {% if order.current_stage == s %}selected{% endif %}>{{ s }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+
+        <!-- DDL(自动) + 收款 -->
+        <div class="form-row">
+            <div class="form-group">
+                <label>DDL状态</label>
+                <div style="padding:8px 12px;background:var(--color-bg);border-radius:var(--radius-sm);font-size:0.85rem;color:var(--color-text-secondary);">
+                    ⚡ {{ order.ddl_status }}
+                </div>
+            </div>
+            <div class="form-group">
+                <label>收款状态</label>
+                <select name="payment_status">
+                    {% for s in PAYMENT_CHOICES %}
+                    <option value="{{ s }}" {% if order.payment_status == s %}selected{% endif %}>{{ s }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+
+        <!-- 财务 -->
+        {% set is_plat = order.source in PLATFORM_SOURCES %}
+        <div id="inline-finance-platform" style="{{ 'display:none;' if not is_plat else '' }}">
+            <div class="form-row">
+                <div class="form-group">
+                    <label>平台收入 (¥)</label>
+                    <input type="number" name="deposit" step="0.01" min="0" value="{{ order.income }}" oninput="calcInlineActual()" id="inline-deposit-plat">
+                </div>
+                <div class="form-group">
+                    <label>手续费 (%)</label>
+                    <input type="number" name="platform_fee_pct" step="0.1" min="0" max="100"
+                           value="{{ '%.1f'|format(order.platform_fee_pct) if order.platform_fee_pct else '5' }}" oninput="calcInlineActual()" id="inline-pct">
+                </div>
+            </div>
+            <div style="margin-top:var(--space-sm);padding:10px;background:var(--color-bg);border-radius:var(--radius-sm);font-size:0.85rem;display:flex;gap:var(--space-lg);">
+                <span>收入: <strong id="inline-income">¥0</strong></span>
+                <span>手续费: <strong style="color:var(--color-danger);">-¥<span id="inline-fee">0</span></strong></span>
+                <span>实收: <strong style="color:var(--color-success);">¥<span id="inline-actual">0</span></strong></span>
+            </div>
+        </div>
+        <div id="inline-finance-direct" style="{{ '' if not is_plat else 'display:none;' }}">
+            <div class="form-row">
+                <div class="form-group">
+                    <label>定金 (¥)</label>
+                    <input type="number" name="deposit" step="0.01" min="0" value="{{ order.deposit }}" oninput="calcInlineActual()" id="inline-deposit-direct">
+                </div>
+                <div class="form-group">
+                    <label>尾款 (¥)</label>
+                    <input type="number" name="balance" step="0.01" min="0" value="{{ order.balance }}" oninput="calcInlineActual()" id="inline-balance-direct">
+                </div>
+            </div>
+            <div style="margin-top:var(--space-sm);padding:10px;background:var(--color-bg);border-radius:var(--radius-sm);font-size:0.85rem;display:flex;gap:var(--space-lg);">
+                <span>定金+尾款: <strong id="inline-total">¥0</strong></span>
+                <span>实收: <strong style="color:var(--color-success);">¥<span id="inline-actual2">0</span></strong></span>
+            </div>
+        </div>
+
+        <!-- 品类 + 日期 -->
+        <div class="form-row" style="margin-top:var(--space-md);">
+            <div class="form-group">
+                <label>稿件类别</label>
+                <input type="text" name="commission_type"
+                       list="type-list-inline"
+                       value="{{ order.commission_type or '' }}"
+                       placeholder="输入或选择..."
+                       autocomplete="off">
+                <datalist id="type-list-inline">
+                    {% for t in existing_types %}
+                    <option value="{{ t }}">
+                    {% endfor %}
+                </datalist>
+            </div>
+            <div class="form-group date-field">
+                <label>排单开始</label>
+                <input type="{{ 'datetime-local' if order.scheduled_start and 'T' in order.scheduled_start else 'date' }}" name="scheduled_start" value="{{ order.scheduled_start or '' }}">
+            </div>
+        </div>
+
+        <div class="form-row">
+            <div class="form-group date-field">
+                <label>排单截止</label>
+                <input type="{{ 'datetime-local' if order.scheduled_end and 'T' in order.scheduled_end else 'date' }}" name="scheduled_end" value="{{ order.scheduled_end or '' }}">
+            </div>
+            <div class="form-group">
+                <label>备注</label>
+                <textarea name="notes" rows="2">{{ order.notes or '' }}</textarea>
+            </div>
+        </div>
+
+        {% if order.is_repeat %}
+        <div style="padding:6px 10px;background:var(--color-bg);border-radius:var(--radius-sm);font-size:0.78rem;color:var(--color-text-secondary);margin-top:var(--space-sm);">
+            🔄 复购用户 · 第 {{ order.repeat_count }} 次下单
+        </div>
+        {% endif %}
+
+        <div class="form-actions">
+            <button type="submit" class="btn btn-primary">💾 保存</button>
+            <button type="button" class="btn btn-secondary" onclick="closeDrawer()">取消</button>
+            <span style="margin-left:auto;">
+                <a href="/orders/{{ order.id }}" class="btn btn-ghost btn-sm" target="_blank">打开完整页面 ↗</a>
+            </span>
+        </div>
+    </form>
+</div>
+
+<script src="/static/datetime-toggle.js"></script>
+<script>
+// 初始化双模式时间选择器（setTimeout 确保 HTMX 注入后 DOM 就绪）
+setTimeout(function() { DateTimeToggle.initAll('#drawer-body .date-field input[type="date"], #drawer-body .date-field input[type="datetime-local"]'); }, 0);
+
+var INLINE_PLATFORM = {{ PLATFORM_SOURCES|list|tojson }};
+function isInlinePlat() { var s = document.querySelector('[name=\"source\"]').value||''; return INLINE_PLATFORM.indexOf(s)!==-1; }
+function toggleInlineFinance() { var p=isInlinePlat(); document.getElementById('inline-finance-platform').style.display=p?'':'none'; document.getElementById('inline-finance-direct').style.display=p?'none':''; calcInlineActual(); }
+function calcInlineActual() {
+    if(isInlinePlat()){ var income=parseFloat(document.getElementById('inline-deposit-plat').value)||0; var pct=parseFloat(document.getElementById('inline-pct').value)||0; var fee=Math.round(income*pct)/100; document.getElementById('inline-income').textContent='¥'+income.toFixed(2); document.getElementById('inline-fee').textContent=fee.toFixed(2); document.getElementById('inline-actual').textContent=(income-fee).toFixed(2); }
+    else{ var d=parseFloat(document.getElementById('inline-deposit-direct').value)||0; var b=parseFloat(document.getElementById('inline-balance-direct').value)||0; document.getElementById('inline-total').textContent='¥'+(d+b).toFixed(2); document.getElementById('inline-actual2').textContent=(d+b).toFixed(2); }
+}
+document.querySelector('[name=\"source\"]').addEventListener('input',toggleInlineFinance);
+document.querySelector('[name=\"source\"]').addEventListener('change',toggleInlineFinance);
+calcInlineActual();
+
+// 自定义日历颜色 — 原生滑动面板
+function initInlineColorPicker() {
+    var trigger = document.getElementById('color-dot-trigger');
+    if (!trigger || trigger._cpInit) return;
+    trigger._cpInit = true;
+    var orderId = trigger.dataset.orderId;
+    ColorPicker.create(trigger, {
+        hex: trigger.dataset.hex || '#b0b0aa',
+        onChange: function(hex) {
+            var hidden = document.getElementById('custom-color-value');
+            if (hidden) hidden.value = hex;
+            var clearBtn = document.getElementById('color-dot-clear');
+            if (clearBtn) clearBtn.style.display = hex && hex !== '#b0b0aa' ? 'inline-flex' : 'none';
+            saveCustomColor(orderId, hex);
+        },
+        showClear: false
+    });
+}
+setTimeout(initInlineColorPicker, 200);
+document.addEventListener('htmx:afterSwap', function(evt) {
+    if (evt.detail.target.id === 'drawer-body') {
+        setTimeout(initInlineColorPicker, 200);
+    }
+});
+
+function saveCustomColor(orderId, hex) {
+    dirtyFetch('/orders/' + orderId + '/color', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ color: hex || null })
+    }).then(function() {
+        if (window.calendar) window.calendar.refetchEvents();
+        showToast('颜色已更新', 'success');
+    });
+}
+
+function clearCustomColor(orderId) {
+    var dot = document.getElementById('color-dot-trigger');
+    var clearBtn = document.getElementById('color-dot-clear');
+    var hidden = document.getElementById('custom-color-value');
+    if (dot) { dot.style.background = '#b0b0aa'; dot.dataset.hex = '#b0b0aa'; }
+    if (clearBtn) clearBtn.style.display = 'none';
+    if (hidden) hidden.value = '';
+    dirtyFetch('/orders/' + orderId + '/color', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ color: null })
+    }).then(function() {
+        if (window.calendar) window.calendar.refetchEvents();
+        showToast('已恢复自动着色', 'success');
+    });
+}
+</script>

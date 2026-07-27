@@ -1,0 +1,302 @@
+{% extends "base.html" %}
+{% block title %}画廊 — oimimo scheduler{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h1 class="page-title">画廊</h1>
+    </div>
+</div>
+
+<!-- 筛选栏（P13c 起服务端筛选） -->
+<div class="card" style="margin-bottom:var(--space-md);">
+    <div class="card-body" style="display:flex;gap:var(--space-sm);flex-wrap:wrap;align-items:center;padding:10px 16px;">
+        <span style="font-size:0.82rem;font-weight:600;color:var(--color-text-secondary);">筛选：</span>
+        <select id="gallery-filter-stage" style="padding:5px 10px;border:1px solid var(--color-border);border-radius:var(--radius-sm);font-size:0.82rem;">
+            <option value="">所有阶段</option>
+            {% for s in stages %}
+            <option value="{{ s }}">{{ s }}</option>
+            {% endfor %}
+        </select>
+        <select id="gallery-filter-source" style="padding:5px 10px;border:1px solid var(--color-border);border-radius:var(--radius-sm);font-size:0.82rem;">
+            <option value="">所有来源</option>
+            {% for s in sources %}
+            <option value="{{ s }}">{{ s }}</option>
+            {% endfor %}
+        </select>
+        <select id="gallery-filter-customer" style="padding:5px 10px;border:1px solid var(--color-border);border-radius:var(--radius-sm);font-size:0.82rem;">
+            <option value="">所有客户</option>
+            {% for c in customers %}
+            <option value="{{ c.name }}">{{ c.name }}</option>
+            {% endfor %}
+        </select>
+        <select id="gallery-filter-type" style="padding:5px 10px;border:1px solid var(--color-border);border-radius:var(--radius-sm);font-size:0.82rem;">
+            <option value="">所有类别</option>
+            {% for t in types %}
+            <option value="{{ t }}">{{ t }}</option>
+            {% endfor %}
+        </select>
+    </div>
+</div>
+
+<div class="gallery-grid" id="gallery-grid"></div>
+
+<!-- 无限滚动哨兵 + 骨架屏 + 结束提示 -->
+<div id="gallery-sentinel" style="height:1px;"></div>
+<div class="gallery-grid" id="gallery-loading" style="display:none;">
+    <div class="gallery-skeleton"></div>
+    <div class="gallery-skeleton"></div>
+    <div class="gallery-skeleton"></div>
+    <div class="gallery-skeleton"></div>
+</div>
+<div id="gallery-end" style="display:none;text-align:center;padding:var(--space-md) 0;font-size:0.8rem;color:var(--color-text-tertiary);">
+    — 已加载全部作品 —
+</div>
+
+<!-- 筛选无结果提示 -->
+<div id="gallery-no-results" class="card" style="display:none;">
+    <div class="card-body">
+        <div class="empty-state">
+            <div class="empty-state-icon">🔍</div>
+            <div class="empty-state-text" id="gallery-no-results-text">没有匹配的图片</div>
+            <div style="margin-top:8px;font-size:0.82rem;color:var(--color-text-tertiary);">
+                试试调整筛选条件
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Lightbox -->
+<div id="gallery-lightbox" class="lightbox-overlay" style="display:none;" onclick="closeLightbox()">
+    <img id="lightbox-img" src="" alt="" onclick="event.stopPropagation()">
+    <div class="lightbox-info" id="lightbox-info"></div>
+    <div class="lightbox-counter" id="lightbox-counter"></div>
+    <button class="lightbox-nav-btn lightbox-prev" onclick="lightboxPrev(); event.stopPropagation()">&#10094;</button>
+    <button class="lightbox-nav-btn lightbox-next" onclick="lightboxNext(); event.stopPropagation()">&#10095;</button>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// ══ 画廊无限滚动 + 服务端筛选 + Lightbox（P13c） ════════════
+
+var BATCH = 24;
+var offset = 0;
+var totalCount = null;
+var loading = false;
+var allDone = false;
+var loadedItems = [];  // 已加载的 .gallery-item DOM，按服务端顺序
+
+var gridEl = document.getElementById('gallery-grid');
+var sentinelEl = document.getElementById('gallery-sentinel');
+var loadingEl = document.getElementById('gallery-loading');
+var endEl = document.getElementById('gallery-end');
+var noResultsEl = document.getElementById('gallery-no-results');
+var totalEl = document.getElementById('gallery-total');
+
+var filterSelects = {
+    stage: document.getElementById('gallery-filter-stage'),
+    source: document.getElementById('gallery-filter-source'),
+    customer: document.getElementById('gallery-filter-customer'),
+    type: document.getElementById('gallery-filter-type')
+};
+
+function hasActiveFilter() {
+    for (var key in filterSelects) {
+        if (filterSelects[key].value) return true;
+    }
+    return false;
+}
+
+function buildUrl() {
+    var params = 'offset=' + offset + '&limit=' + BATCH;
+    for (var key in filterSelects) {
+        var val = filterSelects[key].value;
+        if (val) params += '&' + key + '=' + encodeURIComponent(val);
+    }
+    return '/api/gallery?' + params;
+}
+
+var IMG_FALLBACK = 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22300%22 height=%22200%22%3E%3Crect fill=%22%23e0e0e0%22 width=%22300%22 height=%22200%22/%3E%3Ctext x=%22150%22 y=%22100%22 text-anchor=%22middle%22 fill=%22%23999%22 font-size=%2214%22%3E图片加载失败%3C/text%3E%3C/svg%3E';
+
+function makeItem(o) {
+    var item = document.createElement('div');
+    item.className = 'gallery-item';
+    item.dataset.fullUrl = o.full;
+    item.dataset.title = o.title || '';
+    item.dataset.orderId = o.id;
+
+    var wrap = document.createElement('div');
+    wrap.className = 'gallery-item-img-wrap';
+    wrap.onclick = function() { openLightbox(item); };
+    var img = document.createElement('img');
+    img.src = o.img;
+    img.alt = o.title || '';
+    img.loading = 'lazy';
+    img.onload = function() { wrap.classList.add('loaded'); };
+    img.onerror = function() { img.src = IMG_FALLBACK; wrap.classList.add('loaded'); };
+    wrap.appendChild(img);
+
+    var overlay = document.createElement('div');
+    overlay.className = 'gallery-item-overlay';
+    overlay.onclick = function() { window.location.href = '/orders/' + o.id; };
+    var title = document.createElement('div');
+    title.className = 'gallery-item-title';
+    title.textContent = o.title || '';
+    var meta = document.createElement('div');
+    meta.className = 'gallery-item-meta';
+    meta.textContent = (o.customer || '未分配') + ' · ' + (o.stage || '')
+        + (o.income ? ' · ¥' + Math.round(o.income) : '');
+    overlay.appendChild(title);
+    overlay.appendChild(meta);
+
+    item.appendChild(wrap);
+    item.appendChild(overlay);
+    return item;
+}
+
+function updateEmptyState() {
+    if (totalCount === 0) {
+        document.getElementById('gallery-no-results-text').textContent =
+            hasActiveFilter() ? '没有匹配的图片' : '暂无画廊图片';
+        noResultsEl.style.display = '';
+        gridEl.style.display = 'none';
+    } else {
+        noResultsEl.style.display = 'none';
+        gridEl.style.display = '';
+    }
+}
+
+function loadMore() {
+    if (loading || allDone) return;
+    loading = true;
+    loadingEl.style.display = '';
+    fetch(buildUrl())
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            totalCount = data.total;
+            if (totalEl) totalEl.textContent = totalCount;
+            data.items.forEach(function(o) {
+                var el = makeItem(o);
+                gridEl.appendChild(el);
+                loadedItems.push(el);
+            });
+            offset += data.items.length;
+            if (data.items.length === 0 || offset >= totalCount) {
+                allDone = true;
+                if (totalCount > 0) endEl.style.display = '';
+            }
+            updateEmptyState();
+        })
+        .finally(function() {
+            loading = false;
+            loadingEl.style.display = 'none';
+            // 链式填充：内容不足一屏时哨兵持续处于触发区内，
+            // IntersectionObserver 不再产生新回调，需主动补下一批
+            checkSentinel();
+        });
+}
+
+function checkSentinel() {
+    if (loading || allDone) return;
+    var rect = sentinelEl.getBoundingClientRect();
+    if (rect.top < window.innerHeight + 300) loadMore();
+}
+
+function resetAndLoad() {
+    offset = 0;
+    totalCount = null;
+    allDone = false;
+    loadedItems = [];
+    gridEl.innerHTML = '';
+    endEl.style.display = 'none';
+    loadMore();
+}
+
+for (var key in filterSelects) {
+    filterSelects[key].addEventListener('change', resetAndLoad);
+}
+
+// 底部哨兵：进入视口加载下一批
+var io = new IntersectionObserver(function(entries) {
+    entries.forEach(function(entry) {
+        if (entry.isIntersecting) checkSentinel();
+    });
+}, { rootMargin: '300px' });
+io.observe(sentinelEl);
+
+// 首批加载
+loadMore();
+
+// ══ Lightbox（已加载集合内导航，计数器分母为服务端 total） ══
+var currentLightboxIndex = 0;
+
+function openLightbox(itemEl) {
+    if (loadedItems.length === 0) return;
+    currentLightboxIndex = loadedItems.indexOf(itemEl);
+    if (currentLightboxIndex < 0) currentLightboxIndex = 0;
+    showLightboxImage();
+    document.getElementById('gallery-lightbox').style.display = 'flex';
+    document.body.style.overflow = 'hidden';
+}
+
+function closeLightbox() {
+    document.getElementById('gallery-lightbox').style.display = 'none';
+    document.body.style.overflow = '';
+}
+
+function showLightboxImage() {
+    var item = loadedItems[currentLightboxIndex];
+    if (!item) return;
+    var img = document.getElementById('lightbox-img');
+    img.src = item.dataset.fullUrl;
+    document.getElementById('lightbox-info').textContent = item.dataset.title;
+    var counter = document.getElementById('lightbox-counter');
+    if (counter) {
+        counter.textContent = (currentLightboxIndex + 1) + ' / ' + (totalCount || loadedItems.length);
+    }
+}
+
+function lightboxPrev() {
+    if (loadedItems.length === 0) return;
+    currentLightboxIndex = (currentLightboxIndex - 1 + loadedItems.length) % loadedItems.length;
+    showLightboxImage();
+}
+
+function lightboxNext() {
+    if (loadedItems.length === 0) return;
+    currentLightboxIndex = (currentLightboxIndex + 1) % loadedItems.length;
+    showLightboxImage();
+    // 接近已加载集合末尾时预取下一批
+    if (currentLightboxIndex >= loadedItems.length - 3) loadMore();
+}
+
+// 键盘控制
+document.addEventListener('keydown', function(e) {
+    var lb = document.getElementById('gallery-lightbox');
+    if (lb.style.display === 'none') return;
+    if (e.key === 'Escape') closeLightbox();
+    else if (e.key === 'ArrowLeft') lightboxPrev();
+    else if (e.key === 'ArrowRight') lightboxNext();
+});
+
+// 触摸滑动支持（移动端）
+(function() {
+    var lb = document.getElementById('gallery-lightbox');
+    if (!lb) return;
+    var touchStartX = 0;
+    var touchEndX = 0;
+    lb.addEventListener('touchstart', function(e) {
+        touchStartX = e.changedTouches[0].screenX;
+    }, { passive: true });
+    lb.addEventListener('touchend', function(e) {
+        touchEndX = e.changedTouches[0].screenX;
+        var diff = touchStartX - touchEndX;
+        if (Math.abs(diff) > 50) {
+            if (diff > 0) lightboxNext();
+            else lightboxPrev();
+        }
+    }, { passive: true });
+})();
+</script>
+{% endblock %}

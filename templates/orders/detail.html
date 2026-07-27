@@ -1,0 +1,181 @@
+{% extends "base.html" %}
+{% block title %}{{ order.project_name }} — 订单详情{% endblock %}
+
+{% set breadcrumb_title = order.project_name %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h1 class="page-title">{{ order.project_name }}</h1>
+        <p class="page-subtitle">
+            <span style="font-family:var(--font-mono);">#{{ order.id }}</span>
+            {% if customer %} &middot; <a href="/customers/{{ customer.id }}">{{ customer.name }}</a>{% endif %}
+            {% if order.platform_url %}
+            &middot; <a href="{{ order.platform_url }}" target="_blank" rel="noopener" style="font-size:0.82rem;">原页面 ↗</a>
+            {% endif %}
+        </p>
+    </div>
+    <div style="display:flex;gap:var(--space-sm);">
+        <a href="/orders/{{ order.id }}/edit" class="btn btn-secondary btn-sm">编辑</a>
+        <form hx-post="/orders/{{ order.id }}/delete" hx-confirm="确定删除 #{{ order.id }}？" hx-target="body" style="display:inline;">
+            <button class="btn btn-danger btn-sm">删除</button>
+        </form>
+    </div>
+</div>
+
+<!-- 主要信息：双栏 -->
+<div class="card" style="margin-bottom:var(--space-md);">
+    <div class="card-body" style="padding:0;">
+        <div style="display:grid;grid-template-columns:1fr 1fr;">
+            <!-- 左栏：基本信息 -->
+            <div style="padding:var(--space-md);border-right:1px solid var(--color-border);">
+                <div class="section-label">基本信息</div>
+                <div class="kv-grid">
+                    <div class="kv-row"><span class="kv-key">项目</span><span class="kv-val">{{ order.project_name }}</span></div>
+                    <div class="kv-row"><span class="kv-key">客户</span><span class="kv-val">{% if customer %}<a href="/customers/{{ customer.id }}">{{ customer.name }}</a>{% else %}-{% endif %}</span></div>
+                    <div class="kv-row"><span class="kv-key">来源</span><span class="kv-val">{{ order.source }}{% if order.source in PLATFORM_SOURCES %}<span style="font-size:0.7rem;color:var(--color-text-tertiary);margin-left:4px;">平台</span>{% endif %}</span></div>
+                    <div class="kv-row"><span class="kv-key">类别</span><span class="kv-val">{{ order.commission_type or '-' }}</span></div>
+                    <div class="kv-row"><span class="kv-key">用途</span><span class="kv-val">{{ '商用' if order.is_commercial else '私用' }}</span></div>
+                    <div class="kv-row">
+                        <span class="kv-key">阶段</span>
+                        <span class="kv-val"><span class="stage-badge {{ order.current_stage|stage_class }}">{{ order.current_stage }}</span></span>
+                    </div>
+                    <div class="kv-row">
+                        <span class="kv-key">DDL</span>
+                        <span class="kv-val">
+                            {% if order.is_archived %}<span style="color:var(--color-text-tertiary);">已归档</span>
+                            {% else %}{{ order.ddl_status }}{% endif %}
+                        </span>
+                    </div>
+                    {% if order.is_repeat %}
+                    <div class="kv-row"><span class="kv-key">复购</span><span class="kv-val">第 {{ order.repeat_count }} 次</span></div>
+                    {% endif %}
+                </div>
+            </div>
+            <!-- 右栏：财务 + 日期 -->
+            <div style="padding:var(--space-md);">
+                <div class="section-label">财务信息</div>
+                {% set is_platform = order.source in PLATFORM_SOURCES %}
+                <div class="kv-grid">
+                    {% if is_platform %}
+                    <div class="kv-row"><span class="kv-key">平台收入</span><span class="kv-val mono">¥{{ "%.2f"|format(order.income) }}</span></div>
+                    <div class="kv-row"><span class="kv-key">手续费</span><span class="kv-val mono" style="color:var(--color-danger);">-¥{{ "%.2f"|format(order.platform_fee) }}{% if order.platform_fee_pct %} <span style="font-size:0.72rem;color:var(--color-text-tertiary);">{{ "%.1f"|format(order.platform_fee_pct) }}%</span>{% endif %}</span></div>
+                    {% else %}
+                    <div class="kv-row"><span class="kv-key">定金</span><span class="kv-val mono">¥{{ "%.2f"|format(order.deposit) }}</span></div>
+                    <div class="kv-row"><span class="kv-key">尾款</span><span class="kv-val mono">¥{{ "%.2f"|format(order.balance) }}</span></div>
+                    {% endif %}
+                    <div class="kv-row" style="border-top:1px solid var(--color-border);padding-top:6px;margin-top:2px;">
+                        <span class="kv-key" style="font-weight:700;">实收</span>
+                        <span class="kv-val mono" style="font-weight:700;color:var(--color-success);">¥{{ "%.2f"|format(order.actual_received) }}</span>
+                    </div>
+                    <div class="kv-row"><span class="kv-key">收款</span><span class="kv-val">{{ order.payment_status }}</span></div>
+                </div>
+                <div class="section-label" style="margin-top:var(--space-md);">排期</div>
+                <div class="kv-grid">
+                    <div class="kv-row"><span class="kv-key">页面截稿</span><span class="kv-val mono">{{ order.page_deadline.replace('T', ' ') if order.page_deadline else '-' }}</span></div>
+                    <div class="kv-row"><span class="kv-key">排单开始</span><span class="kv-val mono">{{ order.scheduled_start.replace('T', ' ') if order.scheduled_start else '-' }}</span></div>
+                    <div class="kv-row"><span class="kv-key">排单截止</span><span class="kv-val mono">{{ order.scheduled_end.replace('T', ' ') if order.scheduled_end else '-' }}</span></div>
+                </div>
+            </div>
+        </div>
+        {% if order.notes %}
+        <div style="padding:var(--space-sm) var(--space-md);border-top:1px solid var(--color-border);background:var(--color-bg);font-size:0.85rem;color:var(--color-text-secondary);white-space:pre-wrap;border-radius:0 0 var(--radius-lg) var(--radius-lg);">{{ order.notes|render_notes|safe }}</div>
+        {% endif %}
+    </div>
+</div>
+
+<!-- 作品图片：瀑布流画廊（P15e，与画廊页视觉一致；上传仅编辑模式提供） -->
+<div class="card" style="margin-bottom:var(--space-md);">
+    <div class="card-header">作品图片</div>
+    <div class="card-body">
+        {% if images %}
+        <div class="gallery-grid" id="detail-gallery">
+            {% for im in images %}
+            <div class="gallery-item" data-full-url="/uploads/{{ im.image_path }}" data-title="{{ order.project_name }}">
+                <div class="gallery-item-img-wrap" onclick="openDetailLightbox(this.parentElement)">
+                    <img src="{{ im.image_url }}" alt="{{ order.project_name }}" loading="lazy"
+                         onload="this.parentElement.classList.add('loaded')">
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="empty-state" style="padding:var(--space-lg) 0;">
+            <div class="empty-state-icon">🖼️</div>
+            <div class="empty-state-text">暂无作品图片</div>
+            <div style="margin-top:6px;font-size:0.8rem;color:var(--color-text-tertiary);">
+                进入<a href="/orders/{{ order.id }}/edit">编辑模式</a>可上传图片
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<!-- 图片灯箱（组内导航，复用画廊页 lightbox 样式） -->
+<div id="detail-lightbox" class="lightbox-overlay" style="display:none;" onclick="closeDetailLightbox()">
+    <img id="detail-lightbox-img" src="" alt="" onclick="event.stopPropagation()">
+    <div class="lightbox-info" id="detail-lightbox-info"></div>
+    <div class="lightbox-counter" id="detail-lightbox-counter"></div>
+    <button class="lightbox-nav-btn lightbox-prev" onclick="detailLightboxPrev(); event.stopPropagation()">&#10094;</button>
+    <button class="lightbox-nav-btn lightbox-next" onclick="detailLightboxNext(); event.stopPropagation()">&#10095;</button>
+</div>
+
+{# 返回按钮已由全局面包屑导航替代 #}
+{% endblock %}
+
+{% block scripts %}
+<script>
+// P18-F7：全页表单保存命中「过去时间+完成」→ redirect 带 ?archive_confirm=1，加载后自动弹归档确认
+(function() {
+    var params = new URLSearchParams(window.location.search);
+    // P19-F12：已归档订单不再触发 archiveOrder（避免归档→取消归档循环）
+    var isArchived = {{ order.is_archived | tojson }};
+    if (params.get('archive_confirm') === '1' && !isArchived && typeof archiveOrder === 'function') {
+        setTimeout(function() { archiveOrder({{ order.id }}, false); }, 200);
+    }
+})();
+
+// 详情页作品图灯箱（组内导航，P15e）
+(function() {
+    var detailItems = Array.prototype.slice.call(document.querySelectorAll('#detail-gallery .gallery-item'));
+    var idx = 0;
+    var lb = document.getElementById('detail-lightbox');
+
+    window.openDetailLightbox = function(itemEl) {
+        if (detailItems.length === 0) return;
+        idx = detailItems.indexOf(itemEl);
+        if (idx < 0) idx = 0;
+        showDetailImage();
+        lb.style.display = 'flex';
+        document.body.style.overflow = 'hidden';
+    };
+    window.closeDetailLightbox = function() {
+        lb.style.display = 'none';
+        document.body.style.overflow = '';
+    };
+    function showDetailImage() {
+        var item = detailItems[idx];
+        if (!item) return;
+        document.getElementById('detail-lightbox-img').src = item.dataset.fullUrl;
+        document.getElementById('detail-lightbox-info').textContent = item.dataset.title || '';
+        document.getElementById('detail-lightbox-counter').textContent = (idx + 1) + ' / ' + detailItems.length;
+    }
+    window.detailLightboxPrev = function() {
+        if (detailItems.length === 0) return;
+        idx = (idx - 1 + detailItems.length) % detailItems.length;
+        showDetailImage();
+    };
+    window.detailLightboxNext = function() {
+        if (detailItems.length === 0) return;
+        idx = (idx + 1) % detailItems.length;
+        showDetailImage();
+    };
+    document.addEventListener('keydown', function(e) {
+        if (!lb || lb.style.display === 'none') return;
+        if (e.key === 'Escape') window.closeDetailLightbox();
+        else if (e.key === 'ArrowLeft') window.detailLightboxPrev();
+        else if (e.key === 'ArrowRight') window.detailLightboxNext();
+    });
+})();
+</script>
+{% endblock %}

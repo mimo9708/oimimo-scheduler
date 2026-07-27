@@ -1,0 +1,339 @@
+{% extends "base.html" %}
+{% block title %}日历视图 — oimimo scheduler{% endblock %}
+
+{% block head_extra %}
+    <!-- FullCalendar（仅日历视图） -->
+    <script src="{{ url_for('static', filename='vendor/fullcalendar.index.global.min.js') }}"></script>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h1 class="page-title">日历视图</h1>
+    </div>
+    <div style="display:flex;gap:var(--space-sm);align-items:center;">
+        <!-- 着色模式 -->
+        <select id="color-mode" style="padding:8px 14px;border:1.5px solid var(--color-border);border-radius:10px;background:var(--color-surface);font-size:0.85rem;cursor:pointer;font-weight:600;box-shadow:0 1px 2px rgba(0,0,0,0.03);transition:all 0.15s ease;"
+                onchange="changeColorMode(this.value)">
+            <option value="stage" {% if color_mode == 'stage' %}selected{% endif %}>按阶段着色</option>
+            <option value="source" {% if color_mode in ('source', None, '') %}selected{% endif %}>按来源着色</option>
+            <option value="ddl" {% if color_mode == 'ddl' %}selected{% endif %}>按DDL状态</option>
+            <option value="payment" {% if color_mode == 'payment' %}selected{% endif %}>按收款状态</option>
+            <option value="commission" {% if color_mode == 'commission' %}selected{% endif %}>按稿件类别</option>
+        </select>
+        <button onclick="openCenterModal('/orders/new')" class="btn btn-primary" style="border-radius:10px;padding:8px 16px;font-weight:600;">+ 新建订单</button>
+    </div>
+</div>
+
+<div class="calendar-layout">
+    <!-- 左侧：未排期池 -->
+    <div class="calendar-sidebar">
+        <div class="calendar-sidebar-header">
+            未排期订单池
+            <span style="font-size:0.75rem;color:var(--color-text-tertiary);font-weight:normal;">
+                ({{ unscheduled|length }})
+            </span>
+        </div>
+
+        <!-- P13b F1：可折叠级联筛选容器（同时过滤日历事件与未排期池） -->
+        <div class="pool-filter" id="pool-filter">
+            <button class="pool-filter-toggle" id="pool-filter-toggle" onclick="togglePoolFilter()" type="button">
+                <span>筛选</span><span id="pool-filter-arrow">▸</span>
+            </button>
+            <div class="pool-filter-body" id="pool-filter-body" style="display:none;">
+                <select id="filter-dim" onchange="onFilterDimChange()">
+                    <option value="">选择维度</option>
+                    <option value="stage">阶段</option>
+                    <option value="source">来源</option>
+                    <option value="commission_type">类别</option>
+                    <option value="customer">客户</option>
+                    <option value="payment_status">收款状态</option>
+                </select>
+                <select id="filter-val" onchange="applyPoolFilter()" disabled>
+                    <option value="">先选维度</option>
+                </select>
+                <button class="btn btn-ghost btn-sm" id="filter-clear" onclick="clearPoolFilter()" type="button" style="display:none;">清除</button>
+                <!-- P16d：显示已归档（已完成+退单）开关，默认关闭 -->
+                <label style="display:flex;align-items:center;gap:6px;font-size:0.8rem;color:var(--color-text-secondary);cursor:pointer;padding-top:4px;">
+                    <input type="checkbox" id="show-archived" onchange="toggleShowArchived()"> 显示已归档
+                </label>
+            </div>
+        </div>
+        <script id="filter-options-data" type="application/json">{{ filter_options|tojson|safe }}</script>
+
+        <div class="unscheduled-pool" id="unscheduled-pool">
+            {% include "partials/unscheduled_pool.html" %}
+        </div>
+    </div>
+
+    <!-- 右侧：日历 -->
+    <div class="calendar-main">
+        <div id="calendar"></div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// 当前着色模式
+let currentColorMode = '{{ color_mode or "source" }}';
+
+/* P13b F1：级联筛选（第一级维度 → 第二级联动值） */
+const FILTER_OPTIONS = JSON.parse(document.getElementById('filter-options-data')?.textContent || '{}');
+// 维度 → 后端参数名
+const FILTER_DIM_PARAM = {
+    stage: 'stage', source: 'source', commission_type: 'commission_type',
+    customer: 'customer_id', payment_status: 'payment_status'
+};
+
+function togglePoolFilter() {
+    const body = document.getElementById('pool-filter-body');
+    const arrow = document.getElementById('pool-filter-arrow');
+    const open = body.style.display === 'none';
+    body.style.display = open ? '' : 'none';
+    arrow.textContent = open ? '▾' : '▸';
+}
+
+function onFilterDimChange() {
+    const dim = document.getElementById('filter-dim').value;
+    const valSel = document.getElementById('filter-val');
+    valSel.innerHTML = '';
+    if (!dim) {
+        valSel.disabled = true;
+        valSel.innerHTML = '<option value="">先选维度</option>';
+        applyPoolFilter();
+        return;
+    }
+    const opts = FILTER_OPTIONS[dim] || [];
+    valSel.innerHTML = '<option value="">全部</option>' + opts.map(function(o) {
+        if (typeof o === 'object') return '<option value="' + o.id + '">' + escHtml(o.name) + '</option>';
+        return '<option value="' + escHtml(o) + '">' + escHtml(o) + '</option>';
+    }).join('');
+    valSel.disabled = false;
+    applyPoolFilter();
+}
+
+// 当前筛选参数 → query string
+function poolFilterParams() {
+    let params = '';
+    const dim = document.getElementById('filter-dim').value;
+    const val = document.getElementById('filter-val').value;
+    if (dim && val) {
+        params += '&' + FILTER_DIM_PARAM[dim] + '=' + encodeURIComponent(val);
+    }
+    // P16d：显示已归档开关，勾选时携带 show_archived=1
+    const arch = document.getElementById('show-archived');
+    if (arch && arch.checked) {
+        params += '&show_archived=1';
+    }
+    return params;
+}
+
+// P16d：切换「显示已归档」——复用 applyPoolFilter 统一刷新日历事件与未排期池
+window.toggleShowArchived = function() {
+    applyPoolFilter();
+};
+
+function applyPoolFilter() {
+    const extra = poolFilterParams();
+    // 「清除筛选」仅由维度筛选（dim/val）控制，不受归档开关影响
+    const hasDimFilter = document.getElementById('filter-dim').value && document.getElementById('filter-val').value;
+    document.getElementById('filter-clear').style.display = hasDimFilter ? '' : 'none';
+    // 过滤日历事件
+    if (window.calendar) {
+        window.calendar.setOption('events', '/api/orders/calendar-events?color=' + currentColorMode + extra);
+        window.calendar.refetchEvents();
+    }
+    // 过滤未排期池
+    htmx.ajax('GET', '/api/orders/unscheduled?' + (extra ? extra.slice(1) : ''), { target: '#unscheduled-pool' });
+}
+
+function clearPoolFilter() {
+    document.getElementById('filter-dim').value = '';
+    const valSel = document.getElementById('filter-val');
+    valSel.disabled = true;
+    valSel.innerHTML = '<option value="">先选维度</option>';
+    applyPoolFilter();
+}
+
+// 初始化日历
+document.addEventListener('DOMContentLoaded', function() {
+    initCalendarWithMode(currentColorMode);
+    initPoolDraggable();
+});
+
+// 监听 HTMX 刷新未排期池后重新初始化拖拽
+document.addEventListener('htmx:afterSwap', function(evt) {
+    if (evt.detail.target.id === 'unscheduled-pool') {
+        initPoolDraggable();
+    }
+});
+
+// 初始化未排期池拖拽（FullCalendar Draggable）
+function initPoolDraggable() {
+    var pool = document.getElementById('unscheduled-pool');
+    if (!pool) return;
+
+    // 销毁旧实例（如果存在）
+    if (pool._fcDraggable) {
+        pool._fcDraggable.destroy();
+    }
+
+    // 使用 FullCalendar Draggable 插件让池卡片可拖入日历
+    pool._fcDraggable = new FullCalendar.Draggable(pool, {
+        itemSelector: '.pool-card',
+        eventData: function(eventEl) {
+            return {
+                title: eventEl.querySelector('.pool-card-title')?.textContent || '',
+                durationEditable: true,
+                create: false,   // 不本地创建幻影事件，落点由 drop 回调走服务端 reschedule + refetch
+            };
+        }
+    });
+
+    // 让卡片本身也可被点击编辑
+    pool.querySelectorAll('.pool-card').forEach(function(card) {
+        if (!card.hasAttribute('data-drag-inited')) {
+            card.setAttribute('data-drag-inited', '1');
+        }
+    });
+}
+
+// 切换着色模式
+function changeColorMode(mode) {
+    currentColorMode = mode;
+    if (window.calendar) {
+        window.calendar.setOption('events', '/api/orders/calendar-events?color=' + mode + poolFilterParams());
+        window.calendar.refetchEvents();
+    }
+}
+
+// 带颜色模式的日历初始化
+function initCalendarWithMode(colorMode) {
+    const calendarEl = document.getElementById('calendar');
+    if (!calendarEl) return;
+
+    const calendar = new FullCalendar.Calendar(calendarEl, {
+        initialView: 'dayGridMonth',
+        headerToolbar: {
+            left: 'prev,next today',
+            center: 'title',
+            right: 'dayGridMonth,timeGridWeek'
+        },
+        locale: 'zh-cn',
+        dayCellContent: function(arg) { return arg.dayNumberText.replace('日', ''); },
+        editable: true,
+        droppable: true,
+        eventDurationEditable: true,
+        events: '/api/orders/calendar-events?color=' + colorMode + poolFilterParams(),
+        height: 'auto',
+
+        eventClick: function(info) {
+            openEditDrawer(info.event.id, colorMode);
+        },
+
+        eventDragStop: function(info) {
+            // 检测事件是否被拖到未排期池区域
+            var poolEl = document.getElementById('unscheduled-pool');
+            if (!poolEl) return;
+            var poolRect = poolEl.getBoundingClientRect();
+            var mouseX = info.jsEvent.clientX;
+            var mouseY = info.jsEvent.clientY;
+            // 判断鼠标是否在未排期池范围内
+            if (mouseX >= poolRect.left && mouseX <= poolRect.right &&
+                mouseY >= poolRect.top && mouseY <= poolRect.bottom) {
+                var orderId = info.event.id;
+                dirtyFetch('/orders/' + orderId + '/unschedule', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({})
+                }).then(function() {
+                    info.event.remove();
+                    htmx.ajax('GET', '/api/orders/unscheduled', { target: '#unscheduled-pool' });
+                    showToast('已移回未排期池', 'success');
+                });
+            }
+            // 无论是否在池上，都移除高亮
+            poolEl.classList.remove('drop-target-active');
+        },
+
+        eventDragStart: function() {
+            // 拖拽开始时高亮未排期池
+            var poolEl = document.getElementById('unscheduled-pool');
+            if (poolEl) poolEl.classList.add('drop-target-active');
+        },
+
+        // 拖拽结束后移除高亮（eventDragStop 不总触发，用 eventDrop/eventResize 兕底）
+        eventDrop: function(info) {
+            var poolEl = document.getElementById('unscheduled-pool');
+            if (poolEl) poolEl.classList.remove('drop-target-active');
+            dirtyFetch('/orders/' + info.event.id + '/reschedule', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    start: info.event.startStr,
+                    end: info.event.endStr || info.event.startStr
+                })
+            }).then(function() { showToast('排期已更新', 'success'); });
+        },
+
+        eventResize: function(info) {
+            var poolEl = document.getElementById('unscheduled-pool');
+            if (poolEl) poolEl.classList.remove('drop-target-active');
+            dirtyFetch('/orders/' + info.event.id + '/reschedule', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    start: info.event.startStr,
+                    end: info.event.endStr
+                })
+            }).then(function() { showToast('排期已更新', 'success'); });
+        },
+
+        drop: function(info) {
+            const orderId = info.draggedEl.getAttribute('data-order-id');
+            const dateStr = info.dateStr;
+            dirtyFetch('/orders/' + orderId + '/reschedule', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ start: dateStr, end: dateStr })
+            }).then(function() {
+                calendar.refetchEvents();
+                htmx.ajax('GET', '/api/orders/unscheduled', { target: '#unscheduled-pool' });
+                showToast('已排期到 ' + dateStr, 'success');
+            });
+            info.draggedEl.remove();
+        },
+
+        eventDidMount: function(info) {
+            if (info.event.extendedProps.overdue) {
+                info.el.style.border = '2px solid var(--color-danger)';
+                info.el.style.boxShadow = '0 0 6px rgba(208,59,59,0.3)';
+            }
+        }
+    });
+
+    calendar.render();
+    window.calendar = calendar;
+
+    // P13b F2/F3：ResizeObserver 监听容器，尺寸变化时日历自适应宽度
+    const mainEl = document.querySelector('.calendar-main');
+    if (mainEl && window.ResizeObserver) {
+        let resizeTimer = null;
+        new ResizeObserver(function() {
+            clearTimeout(resizeTimer);
+            resizeTimer = setTimeout(function() { calendar.updateSize(); }, 80);
+        }).observe(mainEl);
+    }
+}
+
+// 重写抽屉打开函数，传递 color_mode 参数
+function openEditDrawer(orderId, colorMode) {
+    const drawer = document.getElementById('edit-drawer');
+    const body = document.getElementById('drawer-body');
+    drawer.classList.remove('hidden');
+    body.innerHTML = '<div class="empty-state"><div class="empty-state-icon">⏳</div><div class="empty-state-text">加载中...</div></div>';
+    htmx.ajax('GET', '/orders/' + orderId + '/edit?inline=1', { target: '#drawer-body' });
+}
+</script>
+{% endblock %}

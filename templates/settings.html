@@ -1,0 +1,671 @@
+{% extends "base.html" %}
+{% block title %}设置 — oimimo scheduler{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h1 class="page-title">设置</h1>
+    </div>
+    <div style="display:flex;gap:var(--space-sm);">
+        <button class="btn btn-primary" onclick="document.getElementById('settings-form').submit();">保存全部</button>
+        <form method="POST" action="/settings/reset" style="display:inline;"
+              onsubmit="return confirm('确定要恢复默认设置吗？')">
+            <button class="btn btn-secondary">恢复默认</button>
+        </form>
+    </div>
+</div>
+
+<!-- Tab 切换 -->
+<div style="display:flex;gap:2px;margin-bottom:var(--space-lg);border-bottom:2px solid var(--color-border);">
+    <button class="settings-tab active" onclick="switchTab('theme')" id="tab-theme"
+            style="padding:8px 20px;border:none;background:none;font-size:0.92rem;font-weight:600;cursor:pointer;color:var(--color-text);border-bottom:2px solid var(--color-text);margin-bottom:-2px;">主题设置</button>
+    <button class="settings-tab" onclick="switchTab('source')" id="tab-source"
+            style="padding:8px 20px;border:none;background:none;font-size:0.92rem;font-weight:500;cursor:pointer;color:var(--color-text-secondary);border-bottom:2px solid transparent;margin-bottom:-2px;">订单属性</button>
+    <button class="settings-tab" onclick="switchTab('appearance')" id="tab-appearance"
+            style="padding:8px 20px;border:none;background:none;font-size:0.92rem;font-weight:500;cursor:pointer;color:var(--color-text-secondary);border-bottom:2px solid transparent;margin-bottom:-2px;">外观设置</button>
+    <button class="settings-tab" onclick="switchTab('system')" id="tab-system"
+            style="padding:8px 20px;border:none;background:none;font-size:0.92rem;font-weight:500;cursor:pointer;color:var(--color-text-secondary);border-bottom:2px solid transparent;margin-bottom:-2px;">系统</button>
+</div>
+
+<form id="settings-form" method="POST" action="/settings">
+
+    <!-- ═══════════ Tab: 主题设置 ═══════════ -->
+    <div id="panel-theme">
+        <!-- P16j：激活的自定义 CSS 主题 id（随「保存全部」一同提交；选内置预设时置空） -->
+        <input type="hidden" name="active_custom_theme" id="active-custom-theme-input" value="{{ active_custom_theme }}">
+        <!-- 预设主题 -->
+        <div class="card" style="margin-bottom:var(--space-md);">
+            <div class="card-header">预设主题</div>
+            <div class="card-body">
+                <p style="font-size:0.85rem;color:var(--color-text-secondary);margin-bottom:var(--space-lg);">选择一个预设主题可快速切换整套配色。选择后仍可在下方微调单个颜色，点击「保存全部」生效。</p>
+                <div style="display:grid;grid-template-columns:repeat(auto-fill, minmax(200px, 1fr));gap:var(--space-sm);">
+                    {% for preset in preset_themes %}
+                    <div class="preset-card" data-preset-id="{{ preset.id }}"
+                         onclick="applyPreset('{{ preset.id }}')"
+                         style="cursor:pointer;padding:14px;border:2px solid {% if preset.active %}var(--color-accent){% else %}var(--color-border){% endif %};border-radius:var(--radius-md);transition:border-color 0.15s;{% if preset.active %}background:color-mix(in srgb, var(--color-accent) 6%, transparent);{% endif %}">
+                        <div style="display:flex;gap:3px;margin-bottom:8px;height:28px;border-radius:4px;overflow:hidden;">
+                            {% for color in preset.preview %}
+                            <div style="flex:1;background:{{ color }};"></div>
+                            {% endfor %}
+                        </div>
+                        <div style="font-weight:600;font-size:0.9rem;">{{ preset.label }}</div>
+                        <div style="font-size:0.75rem;color:var(--color-text-tertiary);margin-top:2px;">{{ preset.desc }}</div>
+                        {% if preset.active %}
+                        <div class="preset-badge" style="font-size:0.7rem;color:var(--color-accent);margin-top:4px;font-weight:600;">✓ 当前</div>
+                        {% endif %}
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+        <!-- 自定义 CSS 主题（P16j） · P18-F4.2：默认折叠，状态记 localStorage -->
+        <div class="card" style="margin-bottom:var(--space-md);">
+            <div class="card-header" id="css-theme-header" onclick="toggleCssTheme()" style="cursor:pointer;display:flex;align-items:center;justify-content:space-between;user-select:none;">
+                <span>自定义 CSS 主题</span>
+                <i data-lucide="chevron-down" id="css-theme-chevron" style="width:18px;height:18px;transition:transform 0.15s;"></i>
+            </div>
+            <div class="card-body" id="css-theme-body" style="display:none;">
+                <p style="font-size:0.85rem;color:var(--color-text-secondary);margin-bottom:var(--space-md);">粘贴 CSS 覆盖主题变量（例如 <code>:root { --color-accent: #ff5c5c; }</code>），命名后保存为预设。仅接受纯 CSS，最大 20000 字符，自动剔除脚本等非法内容。选用后其 CSS 优先级高于上方预设。</p>
+                {% if theme_err %}
+                <div style="padding:8px 12px;margin-bottom:var(--space-md);border-radius:var(--radius-sm);background:var(--color-danger-bg);color:var(--color-danger);font-size:0.85rem;">⚠ 导入失败：{{ theme_err }}</div>
+                {% endif %}
+                {% if custom_themes %}
+                <div style="display:grid;grid-template-columns:repeat(auto-fill, minmax(200px, 1fr));gap:var(--space-sm);margin-bottom:var(--space-lg);">
+                    {% for t in custom_themes %}
+                    <div class="preset-card" style="padding:14px;border:2px solid {% if t.id == active_custom_theme %}var(--color-accent){% else %}var(--color-border){% endif %};border-radius:var(--radius-md);{% if t.id == active_custom_theme %}background:color-mix(in srgb, var(--color-accent) 6%, transparent);{% endif %}">
+                        <div style="font-weight:600;font-size:0.9rem;word-break:break-all;">{{ t.name }}</div>
+                        {% if t.id == active_custom_theme %}
+                        <div style="font-size:0.7rem;color:var(--color-accent);margin-top:4px;font-weight:600;">✓ 当前</div>
+                        {% endif %}
+                        <div style="display:flex;gap:6px;margin-top:10px;">
+                            <button type="button" class="btn btn-secondary btn-sm" style="flex:1;" onclick="applyCustomTheme('{{ t.id }}')">选用</button>
+                            <button type="button" class="btn btn-ghost btn-sm" style="color:var(--color-danger);" onclick="deleteCustomTheme('{{ t.id }}')">删除</button>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% endif %}
+                <div style="display:flex;flex-direction:column;gap:var(--space-sm);">
+                    <input type="text" id="custom-theme-name" placeholder="主题名称（如：我的深色）"
+                           style="padding:8px 12px;border:1px solid var(--color-border);border-radius:var(--radius-sm);font-size:0.88rem;">
+                    <textarea id="custom-theme-css" rows="6" placeholder=":root {&#10;    --color-accent: #ff5c5c;&#10;    --color-bg: #1a1a1a;&#10;}"
+                              style="padding:10px 12px;border:1px solid var(--color-border);border-radius:var(--radius-sm);font-size:0.82rem;font-family:'JetBrains Mono','SF Mono',monospace;resize:vertical;"></textarea>
+                    <div style="display:flex;justify-content:flex-end;">
+                        <button type="button" class="btn btn-primary btn-sm" onclick="saveCustomTheme()">保存为预设并选用</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <!-- 日历着色 -->
+        <div class="card" style="margin-bottom:var(--space-md);">
+            <div class="card-header">日历着色模式</div>
+            <div class="card-body">
+                <div style="display:flex;gap:2px;margin-bottom:var(--space-lg);flex-wrap:wrap;">
+                    {% for mode in cal_modes %}
+                    <button type="button" class="mode-tab" data-mode="{{ mode.id }}"
+                            style="padding:8px 16px;border:1px solid var(--color-border);border-radius:var(--radius-sm);font-size:0.9rem;cursor:pointer;background:var(--color-surface);"
+                            onclick="switchModeTab('{{ mode.id }}')">{{ mode.name }}</button>
+                    {% endfor %}
+                </div>
+                {% for mode in cal_modes %}
+                <div class="mode-panel" id="cal-panel-{{ mode.id }}" style="display:none;">
+                    <div style="display:flex;border-radius:var(--radius-md);overflow:hidden;height:40px;margin-bottom:var(--space-lg);">
+                        {% for item in cal_palettes[mode.id] %}
+                        <div style="flex:1;background:{{ item.value }};min-width:30px;" title="{{ item.label }}"></div>
+                        {% endfor %}
+                    </div>
+                    <div style="display:grid;grid-template-columns:repeat(auto-fill, minmax(280px, 1fr));gap:var(--space-sm);">
+                        {% for item in cal_palettes[mode.id] %}
+                        <div class="color-row" data-key="{{ item.key }}" style="display:flex;align-items:center;gap:var(--space-sm);padding:var(--space-sm);border:1px solid var(--color-border);border-radius:var(--radius-sm);">
+                            <div class="cp-trigger" data-hex="{{ item.value }}" style="background:{{ item.value }};"></div>
+                            <div style="flex:1;min-width:0;">
+                                <div style="font-size:0.92rem;font-weight:500;">{{ item.label }}</div>
+                            </div>
+                            <input type="hidden" name="{{ item.key }}" value="{{ item.value }}">
+                            <button type="button" class="btn-ghost btn-sm" style="font-size:0.72rem;color:var(--color-text-tertiary);"
+                                    onclick="resetPickerColor(this, '{{ item.default }}')">↺</button>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+
+        <!-- 全局主题色 -->
+        {% for group_name, items in groups.items() %}
+        <div class="card" style="margin-bottom:var(--space-md);">
+            <div class="card-header">{{ group_name }}</div>
+            <div class="card-body">
+                <div style="display:grid;grid-template-columns:repeat(auto-fill, minmax(240px, 1fr));gap:var(--space-sm);">
+                    {% for item in items %}
+                    <div class="color-simple-row" style="display:flex;align-items:center;gap:var(--space-sm);padding:var(--space-sm);border:1px solid var(--color-border);border-radius:var(--radius-sm);">
+                        <div class="cp-trigger small" data-hex="{{ item.value }}" style="background:{{ item.value }};"></div>
+                        <div style="flex:1;min-width:0;font-size:0.88rem;">{{ item.label }}</div>
+                        <input type="hidden" name="{{ item.key }}" value="{{ item.value }}">
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+
+    <!-- ═══════════ Tab: 订单属性 ═══════════ -->
+    <div id="panel-source" style="display:none;">
+        <div class="card" style="margin-bottom:var(--space-md);">
+            <div class="card-header">来源管理</div>
+            <div class="card-body">
+                <p style="font-size:0.88rem;color:var(--color-text-secondary);margin-bottom:var(--space-lg);">
+                    勾选「平台」的来源会在订单中显示手续费计算，未勾选的来源不计算手续费（直接收全款）。
+                </p>
+                <div style="display:grid;grid-template-columns:repeat(auto-fill, minmax(280px, 1fr));gap:var(--space-sm);">
+                    {% for src in source_list %}
+                    {% set is_plat = src in platform_sources %}
+                    {% set def_fee = all_settings.get('default_fee_' + src, '5') %}
+                    <div class="source-item" style="display:flex;align-items:center;gap:var(--space-sm);padding:10px 14px;border:1px solid var(--color-border);border-radius:var(--radius-sm);">
+                        <span style="flex:1;font-weight:500;min-width:60px;">{{ src }}</span>
+                        <label style="display:flex;align-items:center;gap:4px;font-size:0.78rem;cursor:pointer;white-space:nowrap;">
+                            <input type="checkbox" name="platform_{{ src }}" value="{{ src }}"
+                                   {% if is_plat %}checked{% endif %} onchange="toggleFeeInput(this)"
+                                   style="width:15px;height:15px;cursor:pointer;"> 平台
+                        </label>
+                        <input type="number" name="default_fee_{{ src }}" value="{{ def_fee }}"
+                               step="0.5" min="0" max="100"
+                               style="width:52px;padding:3px 5px;border:1px solid var(--color-border);border-radius:3px;font-size:0.78rem;text-align:center;{% if not is_plat %}display:none;{% endif %}"
+                               class="fee-input">
+                        <span style="font-size:0.72rem;color:var(--color-text-tertiary);">%</span>
+                    </div>
+                    {% endfor %}
+                </div>
+                <div style="margin-top:var(--space-lg);padding-top:var(--space-md);border-top:1px solid var(--color-border);">
+                    <label style="font-size:0.85rem;font-weight:600;">添加新来源</label>
+                    <div style="display:flex;gap:var(--space-sm);margin-top:6px;">
+                        <input type="text" id="new-source-name" placeholder="输入来源名称"
+                               style="flex:1;padding:8px 12px;border:1px solid var(--color-border);border-radius:var(--radius-sm);font-size:0.88rem;">
+                        <input type="hidden" name="source_list_input" id="source-list-hidden" value="{{ source_list|join(',') }}">
+                        <button type="button" class="btn btn-primary btn-sm" onclick="addSource()" style="white-space:nowrap;">+ 添加</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <!-- 收款状态（系统锁定，不可自定义） -->
+        <div class="card" style="margin-bottom:var(--space-md);">
+            <div class="card-header">收款状态</div>
+            <div class="card-body">
+                <p style="font-size:0.82rem;color:var(--color-text-tertiary);margin-bottom:var(--space-sm);">以下为系统预置收款状态，不可自定义。</p>
+                <div style="display:flex;flex-wrap:wrap;gap:6px;">
+                    {% for ps in PAYMENT_CHOICES %}
+                    <span class="settings-tag">{{ ps }}</span>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+        <!-- 稿件类别管理 -->
+        <div class="card" style="margin-bottom:var(--space-md);">
+            <div class="card-header">稿件类别管理</div>
+            <div class="card-body">
+                <p style="font-size:0.88rem;color:var(--color-text-secondary);margin-bottom:var(--space-sm);">自定义稿件类别。修改后订单表单中的类别下拉将同步更新。</p>
+                <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:var(--space-md);" id="commission-type-tags">
+                    {% for ct in all_settings.get('commission_type_list', '单人半身,色稿大头,双人横插,立绘,场景插画,Q版,服设,厚涂头像').split(',') %}
+                    {% set ct = ct.strip() %}
+                    {% if ct %}
+                    <span class="settings-tag commission-tag">{{ ct }}<button type="button" class="settings-tag-remove" onclick="removeCommissionTag(this)" title="删除">×</button></span>
+                    {% endif %}
+                    {% endfor %}
+                </div>
+                <div style="display:flex;gap:var(--space-sm);">
+                    <input type="text" id="new-commission-name" placeholder="输入新稿件类别名称"
+                           style="flex:1;padding:8px 12px;border:1px solid var(--color-border);border-radius:var(--radius-sm);font-size:0.88rem;"
+                           onkeydown="if(event.key==='Enter'){addCommissionTag();event.preventDefault();}">
+                    <input type="hidden" name="commission_type_list" id="commission-type-hidden" value="{{ all_settings.get('commission_type_list', '单人半身,色稿大头,双人横插,立绘,场景插画,Q版,服设,厚涂头像') }}">
+                    <button type="button" class="btn btn-primary btn-sm" onclick="addCommissionTag()" style="white-space:nowrap;">+ 添加</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══════════ Tab: 外观设置 ═══════════ -->
+    <div id="panel-appearance" style="display:none;">
+        <div class="card" style="margin-bottom:var(--space-md);">
+            <div class="card-header">字体大小</div>
+            <div class="card-body">
+                <div style="display:flex;gap:var(--space-sm);">
+                    {% for size, label in [('14px','小'),('16px','中'),('18px','大'),('20px','特大')] %}
+                    <label class="appearance-option" style="flex:1;text-align:center;padding:12px;border:2px solid {% if font_size == size %}var(--color-text){% else %}var(--color-border){% endif %};border-radius:var(--radius-md);cursor:pointer;font-size:{{ size }};">
+                        <input type="radio" name="font_size" value="{{ size }}" {% if font_size == size %}checked{% endif %} style="display:none;">
+                        {{ label }}<br><span style="font-size:0.75rem;color:var(--color-text-tertiary);">{{ size }}</span>
+                    </label>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+        <div class="card" style="margin-bottom:var(--space-md);">
+            <div class="card-header">字体样式</div>
+            <div class="card-body">
+                <div style="display:flex;gap:var(--space-sm);">
+                    {% for fam, label, preview in [('system','系统默认','Aa 系统默认字体'),('serif','衬线体','Aa 衬线体'),('mono','等宽体','Aa 等宽体')] %}
+                    <label class="appearance-option" style="flex:1;text-align:center;padding:16px 12px;border:2px solid {% if font_family == fam %}var(--color-text){% else %}var(--color-border){% endif %};border-radius:var(--radius-md);cursor:pointer;">
+                        <input type="radio" name="font_family" value="{{ fam }}" {% if font_family == fam %}checked{% endif %} style="display:none;">
+                        <div style="font-size:1.4rem;margin-bottom:4px;">{{ preview }}</div>
+                        <div style="font-size:0.82rem;color:var(--color-text-secondary);">{{ label }}</div>
+                    </label>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+        <!-- P18-F4.3：快捷键（功能固定，按键可自定义） -->
+        <div class="card" style="margin-bottom:var(--space-md);">
+            <div class="card-header">快捷键</div>
+            <div class="card-body">
+                <p style="font-size:0.85rem;color:var(--color-text-secondary);margin-bottom:var(--space-md);">功能固定，按键可自定义。组合键写法如 <code>Ctrl+N</code>、<code>Escape</code>；导航类支持 <code>g</code> 前缀（先按 g 再按目标键，如 <code>g h</code>）。修改后点击右上角「保存全部」生效。</p>
+                <div style="display:flex;flex-direction:column;gap:8px;">
+                    {% for key, label in SHORTCUT_LABELS.items() %}
+                    <div style="display:flex;align-items:center;justify-content:space-between;gap:var(--space-md);padding:8px 12px;background:var(--color-bg);border-radius:var(--radius-sm);">
+                        <span style="font-size:0.88rem;">{{ label }}</span>
+                        <input type="text" class="shortcut-input" data-shortcut-key="{{ key }}" value="{{ shortcuts[key] }}"
+                               style="width:160px;text-align:center;padding:6px 10px;border:1px solid var(--color-border);border-radius:var(--radius-sm);font-size:0.82rem;font-family:'JetBrains Mono','SF Mono',monospace;background:var(--color-surface);">
+                    </div>
+                    {% endfor %}
+                </div>
+                <input type="hidden" name="shortcuts_json" id="shortcuts-json-input" value="">
+            </div>
+        </div>
+    </div>
+</form>
+
+<!-- ═══════════ Tab: 系统 ═══════════ -->
+<div id="panel-system" style="display:none;">
+    <div class="card" style="margin-bottom:var(--space-md);">
+        <div class="card-header">重启应用</div>
+        <div class="card-body">
+            <p style="font-size:0.85rem;color:var(--color-text-secondary);margin-bottom:var(--space-sm);">在启动器窗口中点击「🔄 重启服务」按钮即可重启。</p>
+            <div style="display:flex;align-items:center;gap:var(--space-sm);padding:10px 14px;background:var(--color-bg);border-radius:var(--radius-sm);">
+                <div style="flex:1;">
+                    <div style="font-weight:600;font-size:0.88rem;">打开程序目录</div>
+                    <div style="font-size:0.78rem;color:var(--color-text-tertiary);">手动双击 exe 或运行 launcher.py</div>
+                </div>
+                <button class="btn btn-secondary btn-sm" onclick="openAppFolder()">打开</button>
+            </div>
+        </div>
+    </div>
+    <div class="card" style="margin-bottom:var(--space-md);">
+        <div class="card-header">前端错误日志<button class="btn btn-ghost btn-sm" onclick="clearErrorLogs()" style="font-size:0.75rem;margin-left:auto;">清空日志</button></div>
+        <div class="card-body" style="padding:0;">
+            <div id="error-log-viewer" style="max-height:400px;overflow-y:auto;"></div>
+            <div id="error-log-empty" class="empty-state" style="padding:var(--space-lg);"><div class="empty-state-text">暂无错误记录</div></div>
+        </div>
+    </div>
+    <div class="card" style="margin-bottom:var(--space-md);">
+        <div class="card-header">缓存清理</div>
+        <div class="card-body">
+            <div style="display:flex;flex-direction:column;gap:var(--space-sm);">
+                <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;background:var(--color-bg);border-radius:var(--radius-sm);">
+                    <div><div style="font-weight:500;font-size:0.88rem;">本地存储</div><div style="font-size:0.75rem;color:var(--color-text-tertiary);">统计范围偏好、错误日志等</div></div>
+                    <button class="btn btn-secondary btn-sm" onclick="clearLocalStorage()">清除</button>
+                </div>
+                <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;background:var(--color-bg);border-radius:var(--radius-sm);">
+                    <div><div style="font-weight:500;font-size:0.88rem;">会话存储</div><div style="font-size:0.75rem;color:var(--color-text-tertiary);">当前会话临时数据</div></div>
+                    <button class="btn btn-secondary btn-sm" onclick="clearSessionStorage()">清除</button>
+                </div>
+            </div>
+            <div style="margin-top:var(--space-sm);">
+                <button class="btn btn-sm btn-danger" onclick="clearAllStorage()">清除全部本地存储</button>
+            </div>
+        </div>
+    </div>
+    <!-- R3 意见反馈：小入口（右对齐小号 ghost，不做成卡片） -->
+    <div style="text-align:right;margin-top:2px;">
+        <button class="btn btn-ghost btn-sm" onclick="openFeedbackModal()" style="font-size:0.78rem;color:var(--color-text-tertiary);">💬 意见反馈</button>
+    </div>
+</div>
+
+<!-- R3 意见反馈弹窗（遮罩点击关闭） -->
+<div id="feedback-modal" style="display:none;position:fixed;inset:0;background:rgba(15,15,15,0.4);z-index:2000;align-items:center;justify-content:center;" onclick="if(event.target===this)closeFeedbackModal()">
+    <div class="card" style="width:360px;max-width:90vw;">
+        <div class="card-body" style="text-align:center;">
+            <img src="{{ url_for('static', filename='logo.png') }}" alt="logo" style="width:48px;height:48px;border-radius:12px;margin-bottom:8px;">
+            <div style="font-weight:600;font-size:1rem;margin-bottom:4px;">给开发者提建议</div>
+            <p style="font-size:0.78rem;color:var(--color-text-tertiary);margin-bottom:var(--space-md);">使用中遇到 bug 或有功能想法，欢迎通过以下方式联系我</p>
+            <!-- ═══════════════════════════════════════════ -->
+            <!-- 意见反馈联系方式（修改只需编辑下面几行）：                -->
+            <!--   · 每行一个联系方式：左侧名称+值，右侧按钮                  -->
+            <!--   · 复制类：改显示文本和 copyFeedbackContact('...') 里的值    -->
+            <!--   · 链接类：改 href 和显示文本，会新标签打开                  -->
+            <!-- ═══════════════════════════════════════════ -->
+            <div style="display:flex;flex-direction:column;gap:var(--space-sm);text-align:left;">
+                <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;background:var(--color-bg);border-radius:var(--radius-sm);">
+                    <div><div style="font-weight:500;font-size:0.85rem;">QQ</div><div style="font-size:0.75rem;color:var(--color-text-tertiary);">2545438719</div></div>
+                    <button class="btn btn-secondary btn-sm" onclick="copyFeedbackContact('2545438719')">复制</button>
+                </div>
+                <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;background:var(--color-bg);border-radius:var(--radius-sm);">
+                    <div><div style="font-weight:500;font-size:0.85rem;">邮箱</div><div style="font-size:0.75rem;color:var(--color-text-tertiary);">oimimoxhs@163.com</div></div>
+                    <button class="btn btn-secondary btn-sm" onclick="copyFeedbackContact('feedback@example.com')">复制</button>
+                </div>
+                <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;background:var(--color-bg);border-radius:var(--radius-sm);">
+                    <div><div style="font-weight:500;font-size:0.85rem;">反馈问卷</div><div style="font-size:0.75rem;color:var(--color-text-tertiary);">在线填写，新标签打开</div></div>
+                    <a class="btn btn-secondary btn-sm" href="https://www.oimimo.cn/community" target="_blank" rel="noopener">打开</a>
+                </div>
+            </div>
+            <div style="margin-top:var(--space-md);">
+                <button class="btn btn-ghost btn-sm" onclick="closeFeedbackModal()">关闭</button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// R3 意见反馈弹窗开合与复制
+ function openFeedbackModal() {
+    document.getElementById('feedback-modal').style.display = 'flex';
+}
+function closeFeedbackModal() {
+    document.getElementById('feedback-modal').style.display = 'none';
+}
+function copyFeedbackContact(text) {
+    navigator.clipboard.writeText(text).then(function() {
+        showToast('已复制：' + text, 'success');
+    }, function() {
+        showToast('复制失败，请手动复制：' + text, 'error');
+    });
+}
+
+// 预设主题数据
+var PRESET_DATA = {
+    {% for preset in preset_themes %}
+    '{{ preset.id }}': {
+        {% for k, v in preset.colors.items() %}'{{ k }}': '{{ v }}',{% endfor %}
+    },{% endfor %}
+};
+
+// 对比色计算
+function _contrastColor(hex) {
+    hex = hex.replace('#', '');
+    if (hex.length !== 6) return '#fff';
+    var r = parseInt(hex.substr(0,2), 16);
+    var g = parseInt(hex.substr(2,2), 16);
+    var b = parseInt(hex.substr(4,2), 16);
+    var lum = (0.299*r + 0.587*g + 0.114*b) / 255;
+    return lum > 0.55 ? '#000' : '#fff';
+}
+
+// CSS 变量名映射
+var PRESET_CSS_MAP = {
+    'theme_bg': '--color-bg', 'theme_surface': '--color-surface',
+    'theme_sidebar': '--color-sidebar', 'theme_text': '--color-text',
+    'theme_text_secondary': '--color-text-secondary', 'theme_border': '--color-border',
+    'theme_accent': '--color-accent', 'theme_link': '--color-link',
+    'theme_success': '--color-success', 'theme_warning': '--color-warning',
+    'theme_danger': '--color-danger',
+    'stage_pending': '--stage-pending', 'stage_sketch': '--stage-sketch',
+    'stage_lineart': '--stage-lineart', 'stage_detail': '--stage-detail',
+    'stage_finish': '--stage-finish', 'stage_completed': '--stage-completed',
+    'stage_cancelled': '--stage-cancelled',
+};
+
+// 应用预设主题（写入下方隐藏 input + 色块预览 + 实时预览 CSS 变量）
+function applyPreset(presetId) {
+    var preset = PRESET_DATA[presetId];
+    if (!preset) return;
+    // P16j：选内置预设时清空已选用的自定义主题，保存后内置配色生效
+    var acInput = document.getElementById('active-custom-theme-input');
+    if (acInput) acInput.value = '';
+    var form = document.getElementById('settings-form');
+    var root = document.documentElement;
+
+    Object.keys(preset).forEach(function(key) {
+        // 1. 写入隐藏 input + 色块 trigger
+        var input = form.querySelector('input[name="' + key + '"]');
+        if (input) {
+            input.value = preset[key];
+            var row = input.closest('.color-simple-row') || input.closest('.color-row');
+            if (row) {
+                var trigger = row.querySelector('.cp-trigger');
+                if (trigger) {
+                    trigger.style.background = preset[key];
+                    trigger.dataset.hex = preset[key];
+                    if (trigger._picker && trigger._picker.setHex) trigger._picker.setHex(preset[key]);
+                }
+            }
+        }
+        // 2. 实时预览：更新 CSS 变量
+        var cssVar = PRESET_CSS_MAP[key];
+        if (cssVar) {
+            root.style.setProperty(cssVar, preset[key]);
+            if (key.startsWith('stage_')) {
+                root.style.setProperty(cssVar + '-bg', 'color-mix(in srgb, ' + preset[key] + ' 12%, transparent)');
+            } else if (key === 'theme_success') {
+                root.style.setProperty('--color-success-bg', 'color-mix(in srgb, ' + preset[key] + ' 12%, transparent)');
+            } else if (key === 'theme_warning') {
+                root.style.setProperty('--color-warning-bg', 'color-mix(in srgb, ' + preset[key] + ' 12%, transparent)');
+            } else if (key === 'theme_danger') {
+                root.style.setProperty('--color-danger-bg', 'color-mix(in srgb, ' + preset[key] + ' 12%, transparent)');
+            }
+            if (key === 'theme_accent') root.style.setProperty('--color-on-accent', _contrastColor(preset[key]));
+            else if (key === 'theme_danger') root.style.setProperty('--color-on-danger', _contrastColor(preset[key]));
+            else if (key === 'theme_success') root.style.setProperty('--color-on-success', _contrastColor(preset[key]));
+            else if (key === 'theme_warning') root.style.setProperty('--color-on-warning', _contrastColor(preset[key]));
+            else if (key === 'theme_text') root.style.setProperty('--color-on-text', _contrastColor(preset[key]));
+        }
+    });
+
+    // 3. 更新预设卡片高亮
+    document.querySelectorAll('.preset-card').forEach(function(card) {
+        var isActive = card.dataset.presetId === presetId;
+        card.style.borderColor = isActive ? 'var(--color-accent)' : 'var(--color-border)';
+        card.style.background = isActive ? 'color-mix(in srgb, var(--color-accent) 6%, transparent)' : '';
+        var oldBadge = card.querySelector('.preset-badge');
+        if (oldBadge) oldBadge.remove();
+        if (isActive) {
+            var badge = document.createElement('div');
+            badge.className = 'preset-badge';
+            badge.style.cssText = 'font-size:0.7rem;color:var(--color-accent);margin-top:4px;font-weight:600;';
+            badge.textContent = '\u2713 \u5f53\u524d';
+            card.appendChild(badge);
+        }
+    });
+
+    // 4. 更新日历色条
+    if (typeof updateStripColors === 'function') updateStripColors(activeMode);
+    showToast('\u5df2\u5e94\u7528\u9884\u8bbe\u4e3b\u9898\u9884\u89c8\uff0c\u70b9\u51fb\u300c\u4fdd\u5b58\u5168\u90e8\u300d\u751f\u6548', 'success');
+}
+
+// 初始化所有色块选色器
+(function() {
+    var triggers = document.querySelectorAll('#panel-theme .cp-trigger');
+    triggers.forEach(function(trigger) {
+        var row = trigger.closest('.color-row') || trigger.closest('.color-simple-row');
+        var textInput = row ? row.querySelector('input[type="text"]') : null;
+        var hexVal = row ? row.querySelector('.hex-val') : null;
+        ColorPicker.create(trigger, {
+            hex: trigger.dataset.hex || '#b0b0aa',
+            onChange: function(hex) {
+                if (textInput) textInput.value = hex;
+                if (hexVal) hexVal.textContent = hex;
+                updateStripColors(activeMode);
+            }
+        });
+    });
+})();
+
+// 文本输入同步色块
+function syncPickerText(input) {
+    var v = input.value.trim();
+    if (!v.startsWith('#')) v = '#' + v;
+    if (!/^#[0-9a-fA-F]{6}$/.test(v)) return;
+    var row = input.closest('.color-row') || input.closest('.color-simple-row');
+    var trigger = row ? row.querySelector('.cp-trigger') : null;
+    var hexVal = row ? row.querySelector('.hex-val') : null;
+    if (trigger) { trigger.style.background = v; trigger.dataset.hex = v; }
+    if (hexVal) hexVal.textContent = v;
+    updateStripColors(activeMode);
+}
+
+// 重置颜色
+function resetPickerColor(btn, defaultHex) {
+    var row = btn.closest('.color-row') || btn.closest('.color-simple-row');
+    var trigger = row ? row.querySelector('.cp-trigger') : null;
+    var textInput = row ? row.querySelector('input[type="text"]') : null;
+    var hexVal = row ? row.querySelector('.hex-val') : null;
+    if (trigger) { trigger.style.background = defaultHex; trigger.dataset.hex = defaultHex; }
+    if (textInput) textInput.value = defaultHex;
+    if (hexVal) hexVal.textContent = defaultHex;
+    updateStripColors(activeMode);
+}
+
+// P16j：自定义 CSS 主题（导入 / 选用 / 删除，均以独立 POST 提交，避免嵌入 #settings-form）
+function _postThemeForm(action, fields) {
+    var f = document.createElement('form');
+    f.method = 'POST';
+    f.action = action;
+    Object.keys(fields).forEach(function(k) {
+        var inp = document.createElement('input');
+        inp.type = 'hidden';
+        inp.name = k;
+        inp.value = fields[k];
+        f.appendChild(inp);
+    });
+    document.body.appendChild(f);
+    f.submit();
+}
+function saveCustomTheme() {
+    var name = document.getElementById('custom-theme-name').value.trim();
+    var css = document.getElementById('custom-theme-css').value;
+    if (!name) { showToast('\u8bf7\u586b\u5199\u4e3b\u9898\u540d\u79f0', 'error'); return; }
+    if (!css.trim()) { showToast('\u8bf7\u7c98\u8d34 CSS \u5185\u5bb9', 'error'); return; }
+    _postThemeForm('/settings/theme/import', {theme_name: name, theme_css: css});
+}
+function applyCustomTheme(id) {
+    _postThemeForm('/settings/theme/apply', {theme_id: id});
+}
+function deleteCustomTheme(id) {
+    if (!confirm('\u786e\u5b9a\u5220\u9664\u8be5\u81ea\u5b9a\u4e49\u4e3b\u9898\uff1f')) return;
+    _postThemeForm('/settings/theme/delete', {theme_id: id});
+}
+
+// Tab 切换
+function switchTab(name) {
+    document.querySelectorAll('.settings-tab').forEach(function(t) {
+        var active = t.id === 'tab-' + name;
+        t.style.color = active ? 'var(--color-text)' : 'var(--color-text-secondary)';
+        t.style.fontWeight = active ? '600' : '500';
+        t.style.borderBottomColor = active ? 'var(--color-text)' : 'transparent';
+    });
+    ['theme','source','appearance','system'].forEach(function(n) {
+        var el = document.getElementById('panel-' + n);
+        if (el) el.style.display = n === name ? '' : 'none';
+    });
+    if (name === 'system') renderErrorLogs();
+}
+
+// 稿件类别
+function addCommissionTag() {
+    var input = document.getElementById('new-commission-name');
+    var name = input.value.trim(); if (!name) return;
+    var container = document.getElementById('commission-type-tags');
+    var existing = container.querySelectorAll('.commission-tag');
+    for (var i = 0; i < existing.length; i++) {
+        if (existing[i].textContent.replace('×','').trim() === name) { showToast('已存在', 'error'); return; }
+    }
+    var tag = document.createElement('span');
+    tag.className = 'settings-tag commission-tag';
+    tag.innerHTML = escHtml(name) + '<button type="button" class="settings-tag-remove" onclick="removeCommissionTag(this)" title="删除">×</button>';
+    container.appendChild(tag); input.value = ''; updateCommissionHidden();
+}
+function removeCommissionTag(btn) { btn.parentElement.remove(); updateCommissionHidden(); }
+function updateCommissionHidden() {
+    var tags = document.querySelectorAll('#commission-type-tags .commission-tag');
+    var names = []; tags.forEach(function(t) { names.push(t.textContent.replace('×','').trim()); });
+    document.getElementById('commission-type-hidden').value = names.join(',');
+}
+
+// 来源管理
+function toggleFeeInput(cb) { cb.closest('.source-item').querySelector('.fee-input').style.display = cb.checked ? '' : 'none'; }
+function addSource() {
+    var input = document.getElementById('new-source-name');
+    var name = input.value.trim(); if (!name) return;
+    var hidden = document.getElementById('source-list-hidden');
+    var list = hidden.value ? hidden.value.split(',') : [];
+    if (list.indexOf(name) !== -1) { showToast('该来源已存在', 'error'); return; }
+    list.push(name); hidden.value = list.join(','); input.value = '';
+    var e = escHtml(name);
+    var grid = document.querySelector('#panel-source [style*="display:grid"]');
+    var div = document.createElement('div'); div.className = 'source-item';
+    div.style.cssText = 'display:flex;align-items:center;gap:var(--space-sm);padding:10px 14px;border:1px solid var(--color-border);border-radius:var(--radius-sm);';
+    div.innerHTML = '<span style="flex:1;font-weight:500;min-width:60px;">'+e+'</span><label style="display:flex;align-items:center;gap:4px;font-size:0.78rem;cursor:pointer;white-space:nowrap;"><input type="checkbox" name="platform_'+e+'" value="'+e+'" onchange="toggleFeeInput(this)" style="width:15px;height:15px;cursor:pointer;"> 平台</label><input type="number" name="default_fee_'+e+'" value="5" step="0.5" min="0" max="100" class="fee-input" style="display:none;width:52px;padding:3px 5px;border:1px solid var(--color-border);border-radius:3px;font-size:0.78rem;text-align:center;"><span style="font-size:0.72rem;color:var(--color-text-tertiary);">%</span>';
+    grid.appendChild(div);
+}
+
+// 日历模式切换
+var activeMode = '{{ cal_modes[0].id }}';
+function switchModeTab(mid) {
+    activeMode = mid;
+    document.querySelectorAll('.mode-tab').forEach(function(b) {
+        var a = b.dataset.mode === mid;
+        b.style.background = a ? 'var(--color-text)' : 'var(--color-surface)';
+        b.style.color = a ? '#fff' : 'var(--color-text)';
+    });
+    document.querySelectorAll('.mode-panel').forEach(function(p) { p.style.display = p.id === 'cal-panel-' + mid ? '' : 'none'; });
+    updateStripColors(mid);
+}
+switchModeTab(activeMode);
+function updateStripColors(mid) {
+    var panel = document.getElementById('cal-panel-' + mid); if (!panel) return;
+    var rows = panel.querySelectorAll('.color-row'), strips = panel.querySelectorAll('.mode-panel [style*="flex:1;background:"]');
+    // 更新色条
+    var stripParent = panel.querySelector('[style*="border-radius:var(--radius-md)"]');
+    if (stripParent) {
+        var swatches = stripParent.children;
+        rows.forEach(function(r, i) {
+            var t = r.querySelector('input[type="text"]');
+            if (t && swatches[i]) swatches[i].style.background = t.value;
+        });
+    }
+}
+
+document.querySelectorAll('.appearance-option').forEach(function(lbl) {
+    lbl.addEventListener('click', function() {
+        lbl.parentNode.querySelectorAll('.appearance-option').forEach(function(s) { s.style.borderColor = 'var(--color-border)'; });
+        lbl.style.borderColor = 'var(--color-text)';
+    });
+});
+
+// P18-F4.2：自定义 CSS 主题折叠（默认折叠，状态存 localStorage）
+function _setCssTheme(open) {
+    var body = document.getElementById('css-theme-body');
+    var chev = document.getElementById('css-theme-chevron');
+    if (!body) return;
+    body.style.display = open ? '' : 'none';
+    if (chev) chev.style.transform = open ? 'rotate(180deg)' : '';
+    try { localStorage.setItem('settings_css_open', open ? '1' : '0'); } catch (e) {}
+}
+function toggleCssTheme() {
+    var body = document.getElementById('css-theme-body');
+    if (!body) return;
+    _setCssTheme(body.style.display === 'none');
+}
+(function () {
+    var open = false;
+    try { open = localStorage.getItem('settings_css_open') === '1'; } catch (e) {}
+    _setCssTheme(open);
+})();
+
+// P18-F4.3：提交前把快捷键输入序列化为 hidden shortcuts_json
+(function () {
+    var form = document.getElementById('settings-form');
+    if (!form) return;
+    form.addEventListener('submit', function () {
+        var out = {};
+        document.querySelectorAll('.shortcut-input').forEach(function (inp) {
+            var k = inp.dataset.shortcutKey;
+            var v = (inp.value || '').trim();
+            if (k && v) out[k] = v;
+        });
+        var hidden = document.getElementById('shortcuts-json-input');
+        if (hidden) hidden.value = JSON.stringify(out);
+    });
+})();
+</script>
+{% endblock %}
