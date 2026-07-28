@@ -1,6 +1,6 @@
 # oimimo scheduler — 项目说明书
 
-> **版本**: v1.0.0 · **更新**: 2026-07-13
+> **版本**: V2 开发版 · **更新**: 2026-07-13
 > **技术栈**: Python Flask 3 + SQLite (WAL) + HTMX 2 + Jinja2 + Pydantic v2 + Tkinter 启动器
 
 面向**独立插画师**的本地接单排单管理工具，覆盖完整工作流：
@@ -19,8 +19,8 @@
 |---|---|
 | [ARCHITECTURE.md](ARCHITECTURE.md) | 架构：进程模型、49 路由全表、DB schema、核心机制（注册表/计算链/事务/统计口径）、安全模型 |
 | [DESIGN.md](DESIGN.md) | 设计系统：Design Tokens、主题/日历调色板、组件与视图规范、响应式 |
-| [../CHANGELOG.md](../CHANGELOG.md) | 版本记录（面向用户的大版本条目） |
-| [../AGENTS.md](../AGENTS.md) | 给 AI/开发者的项目地图：模块职责、数据流、编码约定、运行与验证方式 |
+| [../CHANGELOG.md](../CHANGELOG.md) | 版本迭代记录 |
+| [../AGENTS.md](../AGENTS.md) | 给 AI/开发者的项目地图（仓库根） |
 
 ---
 

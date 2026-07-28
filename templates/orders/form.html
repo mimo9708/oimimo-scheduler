@@ -95,10 +95,10 @@
                 <div id="finance-platform" style="{{ 'display:none;' if not is_plat else '' }}">
                     <div class="form-row">
                         <div class="form-group"><label>平台收入 (¥)</label>
-                            <input type="number" name="deposit" id="deposit-plat" step="0.01" min="0" value="{{ order.income if order else '0' }}" oninput="calcActualReceived()">
+                            <input type="number" name="deposit" id="deposit-plat" step="0.01" min="0" value="{{ order.income if order else '0' }}" oninput="calcActualReceived()" {{ 'disabled' if not is_plat }}>
                         </div>
                         <div class="form-group"><label>手续费 (%)</label>
-                            <input type="number" name="platform_fee_pct" id="platform_fee_pct" step="0.1" min="0" max="100" value="{{ '%.1f'|format(order.platform_fee_pct) if order and order.platform_fee_pct else '5' }}" oninput="calcActualReceived()">
+                            <input type="number" name="platform_fee_pct" id="platform_fee_pct" step="0.1" min="0" max="100" value="{{ '%.1f'|format(order.platform_fee_pct) if order and order.platform_fee_pct else '5' }}" oninput="calcActualReceived()" {{ 'disabled' if not is_plat }}>
                         </div>
                     </div>
                     <div style="margin-top:var(--space-sm);padding:10px;background:var(--color-bg);border-radius:var(--radius-sm);display:grid;grid-template-columns:repeat(3,1fr);gap:8px;font-size:0.85rem;">
@@ -110,10 +110,10 @@
                 <div id="finance-direct" style="{{ '' if not is_plat else 'display:none;' }}">
                     <div class="form-row">
                         <div class="form-group"><label>定金 (¥)</label>
-                            <input type="number" name="deposit" id="deposit-direct" step="0.01" min="0" value="{{ order.deposit if order else '0' }}" oninput="calcActualReceived()">
+                            <input type="number" name="deposit" id="deposit-direct" step="0.01" min="0" value="{{ order.deposit if order else '0' }}" oninput="calcActualReceived()" {{ 'disabled' if is_plat }}>
                         </div>
                         <div class="form-group"><label>尾款 (¥)</label>
-                            <input type="number" name="balance" id="balance-direct" step="0.01" min="0" value="{{ order.balance if order else '0' }}" oninput="calcActualReceived()">
+                            <input type="number" name="balance" id="balance-direct" step="0.01" min="0" value="{{ order.balance if order else '0' }}" oninput="calcActualReceived()" {{ 'disabled' if is_plat }}>
                         </div>
                     </div>
                     <div style="margin-top:var(--space-sm);padding:10px;background:var(--color-bg);border-radius:var(--radius-sm);display:grid;grid-template-columns:repeat(2,1fr);gap:8px;font-size:0.85rem;">
@@ -174,7 +174,11 @@
 <script>
 var PLATFORM = {{ PLATFORM_SOURCES|list|tojson }};
 function isPlatform(){ var s=document.getElementById('source').value||''; return PLATFORM.indexOf(s)!==-1; }
-function toggleFinanceMode(){ var p=isPlatform(); document.getElementById('finance-platform').style.display=p?'':'none'; document.getElementById('finance-direct').style.display=p?'none':''; calcActualReceived(); }
+function toggleFinanceMode(){ var p=isPlatform(); document.getElementById('finance-platform').style.display=p?'':'none'; document.getElementById('finance-direct').style.display=p?'none':''; 
+    // 隐藏区块必须 disabled，否则隐藏的 deposit/balance 仍会随表单提交，导致重复 name 覆盖可见输入（金额膨胀 bug）
+    document.getElementById('deposit-plat').disabled=!p; document.getElementById('platform_fee_pct').disabled=!p;
+    document.getElementById('deposit-direct').disabled=p; document.getElementById('balance-direct').disabled=p;
+    calcActualReceived(); }
 function calcActualReceived(){
     if(isPlatform()){ var i=parseFloat(document.getElementById('deposit-plat').value)||0; var pct=parseFloat(document.getElementById('platform_fee_pct').value)||0; var f=Math.round(i*pct)/100; document.getElementById('preview-income').textContent=i.toFixed(2); document.getElementById('preview-fee').textContent=f.toFixed(2); document.getElementById('preview-actual').textContent=(i-f).toFixed(2); }
     else{ var d=parseFloat(document.getElementById('deposit-direct').value)||0; var b=parseFloat(document.getElementById('balance-direct').value)||0; document.getElementById('preview-total').textContent=(d+b).toFixed(2); document.getElementById('preview-actual2').textContent=(d+b).toFixed(2); }

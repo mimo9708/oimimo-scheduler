@@ -1,7 +1,7 @@
 # oimimo scheduler — 设计系统文档
 
 > **基准日期**: 2026-07-13 · 本文档以 `static/app.css`（2066 行）与模板实测为准。
-> 架构与数据流见 [ARCHITECTURE.md](ARCHITECTURE.md)。
+> 架构与数据流见 [ARCHITECTURE.md](ARCHITECTURE.md)；设计技能：`/clean` `/sleek` `/shadcn` `/theme-factory` `/spacious` `/frontend-design`。
 
 ---
 

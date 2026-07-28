@@ -85,6 +85,11 @@ UPLOAD_ORDERS_DIR = os.path.join(UPLOAD_DIR, 'orders')
 # Jinja 自定义过滤器
 # ═══════════════════════════════════════════════════════════
 
+# #41 当前应用版本（发版时与上传版 CHANGELOG/installer.iss/git tag 保持一致）
+APP_VERSION = '1.1.0'
+# #41 上传版 GitHub 仓库（前端直连其 Releases API 检测新版本）
+GITHUB_REPO = 'mimo9708/oimimo-scheduler'
+
 STAGE_CLASS_MAP = {
     '待开始': 'pending', '色稿': 'sketch', '线稿': 'lineart',
     '细化': 'detail', '收尾': 'finish', '完成': 'completed', '退单': 'cancelled'
@@ -111,12 +116,24 @@ def _reject_bad_range(start_date, end_date):
     return bool((start_date and not _iso_or_none(start_date)) or (end_date and not _iso_or_none(end_date)))
 
 
+def _safe_int(value, default, min_val=1):
+    """#40 P2：查询参数安全转 int，非法/超界回退默认值（防 ?page=abc 直接 500）。"""
+    try:
+        result = int(value)
+    except (TypeError, ValueError):
+        return default
+    return result if result >= min_val else default
+
+
 @app.template_filter('render_notes')
 def render_notes(text):
     """将备注中的图片 URL 渲染为可点击缩略图
 
     P19-F6 安全：URL 经 HTML 属性转义后仅放 src，onclick 改 window.open(this.src)，
     消除 URL 引号逃逸 onclick 属性的注入面。
+    #40 P1 安全：正文先整段 html.escape 再解析图片标记，封堵存储型 XSS
+    （模板侧 |safe 输出，此前正文未转义）；图片正则要求 https?:// 前缀，
+    天然排除 javascript: 伪协议。换行由模板容器 white-space:pre-wrap 处理。
     """
     import html
     import re
@@ -130,16 +147,19 @@ def render_notes(text):
     # 匹配 Markdown 图片语法 ![](url)
     md_img_pattern = re.compile(r'!\[.*?\]\((https?://\S+)\)')
 
-    result = text
+    # 先整段转义，后续替换均基于已转义文本（URL 内的 & 已变 &amp;，
+    # 放入 src 属性合法，浏览器会解码回原值）
+    result = html.escape(text, quote=True)
+
     # 先处理 Markdown 图片
     def md_replace(m):
-        url = html.escape(m.group(1), quote=True)
+        url = m.group(1)  # 已随整段转义，不重复 escape 避免双重转义
         return f'<img src="{url}" class="notes-img" loading="lazy" onclick="window.open(this.src)" title="点击查看原图">'
     result = md_img_pattern.sub(md_replace, result)
 
     # 再处理裸 URL（跳过已处理的和已在 <img> 标签中的）
     def url_replace(m):
-        url = html.escape(m.group(1), quote=True)
+        url = m.group(1)  # 已随整段转义
         return f'<br><img src="{url}" class="notes-img" loading="lazy" onclick="window.open(this.src)" title="点击查看原图"><br>'
     # 简化：只在非 img 标签内替换
     lines = result.split('\n')
@@ -327,6 +347,8 @@ def inject_constants():
         'settings': settings,
         'shortcuts': merge_shortcuts(settings),
         'SHORTCUT_LABELS': SHORTCUT_LABELS,
+        'APP_VERSION': APP_VERSION,
+        'GITHUB_REPO': GITHUB_REPO,
     }
 
 
@@ -412,8 +434,8 @@ def orders_list():
         'status': request.args.get('status'),
         'search': request.args.get('search'),
         'archived': request.args.get('archived', '0') == '1',
-        'page': request.args.get('page', '1'),
-        'per_page': request.args.get('per_page', '30'),
+        'page': _safe_int(request.args.get('page'), 1),
+        'per_page': _safe_int(request.args.get('per_page'), 30),
         'sort': request.args.get('sort'),
         'dir': request.args.get('dir'),
     }
@@ -702,8 +724,10 @@ def _needs_overdue_archive_confirm(order):
     if not ed:
         return False
     try:
-        return date.today() > date.fromisoformat(ed)
+        # #40 P1：兼容精确时间模式 'YYYY-MM-DDTHH:MM'，取前 10 位按日期解析
+        return date.today() > date.fromisoformat(str(ed).strip()[:10])
     except (TypeError, ValueError):
+        logging.warning("_should_confirm_archive: 无法解析 scheduled_end=%r", ed)
         return False
 
 
@@ -755,6 +779,10 @@ def create_order():
 
 @app.post('/orders/<int:order_id>/edit')
 def update_order(order_id):
+    # #40 P4：不存在的订单直接 404，而非静默"假装成功"
+    if not db.get_order(order_id):
+        return "订单不存在", 404
+
     form_data = dict(request.form)
     is_inline = form_data.pop('inline', None) == '1'
     is_modal = form_data.pop('modal', None) == '1'
@@ -939,8 +967,10 @@ def batch_update_orders():
     count = 0
     try:
         if action == 'stage':
-            if value in db.get_choices('stage'):
-                count = db.batch_update_stage(ids, value)          # P19-F5 整批单事务
+            # #40 P3：与单条 stage 路由同样校验，非法值返 400 而非静默成功
+            if value not in db.get_choices('stage'):
+                return jsonify({'success': False, 'error': f'无效阶段: {value}'}), 400
+            count = db.batch_update_stage(ids, value)              # P19-F5 整批单事务
         elif action == 'archive':
             count = db.batch_set_archived(ids, value == '1')       # P19-F1 唯一入口 + F5 单事务
         elif action == 'delete':
@@ -971,7 +1001,12 @@ def create_customer():
     except ValidationError as e:
         return f"数据校验失败: {e.errors()}", 400
     _normalize_customer_tags(data)
-    customer_id = db.create_customer(data)
+    try:
+        customer_id = db.create_customer(data)
+    except ValueError as e:
+        # #40 P3：重名客户返 400 友好提示，不再 500
+        logging.error("create_customer 路由失败: %s", e)
+        return f"创建失败: {e}", 400
     return redirect(url_for('customer_detail', customer_id=customer_id))
 
 
@@ -1224,12 +1259,17 @@ def api_quick_create_customer():
     if not name:
         return '<span style="color:var(--color-danger);font-size:0.82rem;">请输入客户名称</span>', 400
 
-    cid = db.create_customer({
-        'name': name,
-        'platform_url': request.form.get('quick_platform', ''),
-        'preferences': request.form.get('quick_preferences', ''),
-        'notes': request.form.get('quick_notes', ''),
-    })
+    try:
+        cid = db.create_customer({
+            'name': name,
+            'platform_url': request.form.get('quick_platform', ''),
+            'preferences': request.form.get('quick_preferences', ''),
+            'notes': request.form.get('quick_notes', ''),
+        })
+    except ValueError as e:
+        # #40 P3：重名客户返 400 HTMX 友好提示，不再 500
+        logging.error("api_quick_create_customer 失败: %s", e)
+        return f'<span style="color:var(--color-danger);font-size:0.82rem;">{e}</span>', 400
 
     customers = db.list_customers()
     # 返回 select 并将新客户设为选中
@@ -1723,6 +1763,12 @@ def api_shutdown():
         return jsonify({'success': True, 'message': '服务器正在关闭'})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/v1/health')
+def api_health():
+    """#41 健康检查：返回运行状态与当前版本（插件/外部工具探活用）"""
+    return jsonify({'success': True, 'data': {'status': 'ok', 'version': APP_VERSION}})
 
 
 @app.route('/api/log-error', methods=['POST'])

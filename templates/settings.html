@@ -314,6 +314,23 @@
             </div>
         </div>
     </div>
+    <!-- #41 关于与更新 -->
+    <div class="card" style="margin-bottom:var(--space-md);">
+        <div class="card-header">关于与更新</div>
+        <div class="card-body">
+            <div style="display:flex;align-items:center;gap:var(--space-sm);padding:10px 14px;background:var(--color-bg);border-radius:var(--radius-sm);">
+                <div style="flex:1;">
+                    <div style="font-weight:600;font-size:0.88rem;">oimimo scheduler v{{ APP_VERSION }}</div>
+                    <div id="update-check-result" style="font-size:0.78rem;color:var(--color-text-tertiary);margin-top:2px;">点击右侧按钮检测是否有新版本</div>
+                </div>
+                <button class="btn btn-secondary btn-sm" onclick="checkForUpdate(true)">检查更新</button>
+            </div>
+            <div style="margin-top:var(--space-sm);font-size:0.75rem;color:var(--color-text-tertiary);">
+                项目主页：<a href="https://github.com/{{ GITHUB_REPO }}" target="_blank" rel="noopener" style="color:var(--color-info);">github.com/{{ GITHUB_REPO }}</a>
+                · 启动时每 24 小时自动检测一次，发现新版以提醒形式通知，不会自动下载
+            </div>
+        </div>
+    </div>
     <!-- R3 意见反馈：小入口（右对齐小号 ghost，不做成卡片） -->
     <div style="text-align:right;margin-top:2px;">
         <button class="btn btn-ghost btn-sm" onclick="openFeedbackModal()" style="font-size:0.78rem;color:var(--color-text-tertiary);">💬 意见反馈</button>

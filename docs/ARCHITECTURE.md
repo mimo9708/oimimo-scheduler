@@ -1,13 +1,13 @@
 # oimimo scheduler — 架构文档
 
-> **版本**: v1.0.0 · **基准日期**: 2026-07-13
+> **版本**: V2 开发版 · **基准日期**: 2026-07-13
 > 本文档以当前代码事实为准（非规划态）。功能说明见 [PROJECT.md](PROJECT.md)，视觉设计系统见 [DESIGN.md](DESIGN.md)。
 
 ---
 
 ## 一、系统概览
 
-面向独立插画师的**本地单用户**接单排单工具。Tkinter 启动器拉起 Flask 守护线程，用户在浏览器中操作；SQLite 单文件持久化，前端库全部本地 vendor，完全零网络依赖。
+面向独立插画师的**本地单用户**接单排单工具。Tkinter 启动器拉起 Flask 守护线程，用户在浏览器中操作；SQLite 单文件持久化，零网络依赖（前端库已全部本地 vendor 化）。
 
 **运行形态**：
 
@@ -33,7 +33,7 @@ orders.db · uploads/ · exports/ · logs/
 | flask-cors | 未锁定 | `/api/*` CORS 白名单 |
 | Pillow | ≥10.0 | 图片缩略图/预览生成 |
 | pystray | ≥0.19 | 启动器系统托盘（可选，缺失时降级普通窗口） |
-| 前端 vendor（static/vendor/ 本地文件） | HTMX 2 / Lucide / JsBarcode / Frappe Gantt 0.6 / Chart.js 4 / FullCalendar 6 / SortableJS 1 | 按需加载 |
+| 前端库（本地 vendor） | HTMX 2 / Lucide / Frappe Gantt 0.6 / Chart.js 4 / FullCalendar 6 / SortableJS 1 / JsBarcode | static/vendor/ 按需加载，无 CDN |
 
 **代码规模实测**（2026-07-13）：
 
@@ -91,7 +91,7 @@ main()
 | 模板层 | templates/ | base.html（4 block：title/head_extra/content/scripts）+ 页面 + partials |
 | 静态层 | static/ | app.css（设计系统）、app.js（交互）、logo |
 
-> 当前为**扁平化单体**（路由+业务编排同在 app.py），分层靠约定：SQL 只在 db.py，校验只在 models.py，图片 IO 只在 image_processor.py。三层架构（Service/Repository 拆分）保留为远期目标。
+> 当前为**扁平化单体**（路由+业务编排同在 app.py），分层靠约定：SQL 只在 db.py，校验只在 models.py，图片 IO 只在 image_processor.py。`.qoder/rules/project-rules.md` R15 保留三层架构为远期目标。
 
 ---
 
@@ -147,6 +147,7 @@ main()
 | GET `/export/open-folder` | 系统调用打开导出目录 |
 | POST `/api/import/mihuashi` | 浏览器插件导入（`_is_local_origin` 校验，否则 403） |
 | POST `/api/shutdown` | 仅 POST + 本机来源校验（GET→405，跨站→403） |
+| GET `/api/v1/health` | #41 健康检查：返回 `{status, version}`（插件/外部工具探活） |
 | POST `/api/log-error` | 前端错误上报 |
 | GET `/uploads/<path:filename>` · `/favicon.ico` | 静态资源 |
 
@@ -296,9 +297,9 @@ helper：`is_terminal_stage` / `is_refund_stage` / `get_done_stage` / `get_refun
 
 模态框/抽屉（openCenterModal/closeCenterModal/openEditDrawer/closeDrawer）· 看板（initKanban/SortableJS 列内跨列+列头排序/updateKanbanStats/quickStageSwitch）· 回执小票（openReceipt/closeReceipt，统计点明细弹窗）· Toast · 导出 · 侧边栏状态 · Lightbox · 图片上传（initImageUpload 粘贴+选择/uploadImages/removeImage/appendEditThumb）· 页面模块定制器（loadModulePrefs/injectModuleToolbar/collectModules/buildModuleSettingsPanel，P16h 统计模块显隐）· 错误日志（logFrontendError/renderErrorLogs，localStorage 100 条+上报）· 存储清理 · 统计刷新 · ColorPicker（IIFE ~230 行，HSV↔Hex，Canvas SB 面板+色相条，fixed 智能定位，零依赖）。
 
-### 7.5 vendor 按需加载
+### 7.5 vendor 本地按需加载
 
-全部前端库为 static/vendor/ 本地文件（无外网请求）。base.html 仅 HTMX+Lucide+JsBarcode；Frappe Gantt（主页）/ Chart.js（收入）/ FullCalendar（日历）/ SortableJS（看板）在各页 `head_extra`/`scripts` 按需引入。
+前端库全部本地化在 `static/vendor/`，无任何 CDN 依赖。base.html 仅 HTMX+Lucide+JsBarcode；Frappe Gantt（主页）/ Chart.js（收入）/ FullCalendar（日历）/ SortableJS（看板）在各页 `head_extra`/`scripts` 按需引入。
 
 ---
 
@@ -363,11 +364,11 @@ helper：`is_terminal_stage` / `is_refund_stage` / `get_done_stage` / `get_refun
 8. **原生 ColorPicker**：替代 Blossom（overflow 裁剪/定位不可根治），零依赖完全可控。
 9. **收款状态 5 值锁定**：统计口径稳定性的前提。
 10. **来源校验替代鉴权**：本地单用户定位下，以最小成本阻断跨站读写。
-11. **vendor 按需加载**：库文件本地化且分页引入，避免每页 ~1MB JS。
+11. **vendor 本地化 + 按需加载**：离线可用，且避免每页 ~1MB JS。
 12. **`_MEIPASS` 资源路径兼容**：打包后模板/静态与可写数据分目录。
 
 ---
 
 ## 十三、已知约束（反目标）
 
-不 SaaS 化/云同步 · 不引入 SPA 框架 · 不做 AI 自动排期 · 不做多语言 · 不做微服务/消息队列 · 保持 PyInstaller 可打包运行 · 前端库全部本地 vendor，不引入外网 CDN 依赖。
+不 SaaS 化/云同步 · 不引入 SPA 框架 · 不做 AI 自动排期 · 不做多语言 · 不做微服务/消息队列 · 保持 PyInstaller 可打包运行 · 前端库本地 vendor 化（无 CDN 依赖）。

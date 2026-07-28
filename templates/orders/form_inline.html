@@ -124,12 +124,12 @@
             <div class="form-row">
                 <div class="form-group">
                     <label>平台收入 (¥)</label>
-                    <input type="number" name="deposit" step="0.01" min="0" value="{{ order.income }}" oninput="calcInlineActual()" id="inline-deposit-plat">
+                    <input type="number" name="deposit" step="0.01" min="0" value="{{ order.income }}" oninput="calcInlineActual()" id="inline-deposit-plat" {{ 'disabled' if not is_plat }}>
                 </div>
                 <div class="form-group">
                     <label>手续费 (%)</label>
                     <input type="number" name="platform_fee_pct" step="0.1" min="0" max="100"
-                           value="{{ '%.1f'|format(order.platform_fee_pct) if order.platform_fee_pct else '5' }}" oninput="calcInlineActual()" id="inline-pct">
+                           value="{{ '%.1f'|format(order.platform_fee_pct) if order.platform_fee_pct else '5' }}" oninput="calcInlineActual()" id="inline-pct" {{ 'disabled' if not is_plat }}>
                 </div>
             </div>
             <div style="margin-top:var(--space-sm);padding:10px;background:var(--color-bg);border-radius:var(--radius-sm);font-size:0.85rem;display:flex;gap:var(--space-lg);">
@@ -142,11 +142,11 @@
             <div class="form-row">
                 <div class="form-group">
                     <label>定金 (¥)</label>
-                    <input type="number" name="deposit" step="0.01" min="0" value="{{ order.deposit }}" oninput="calcInlineActual()" id="inline-deposit-direct">
+                    <input type="number" name="deposit" step="0.01" min="0" value="{{ order.deposit }}" oninput="calcInlineActual()" id="inline-deposit-direct" {{ 'disabled' if is_plat }}>
                 </div>
                 <div class="form-group">
                     <label>尾款 (¥)</label>
-                    <input type="number" name="balance" step="0.01" min="0" value="{{ order.balance }}" oninput="calcInlineActual()" id="inline-balance-direct">
+                    <input type="number" name="balance" step="0.01" min="0" value="{{ order.balance }}" oninput="calcInlineActual()" id="inline-balance-direct" {{ 'disabled' if is_plat }}>
                 </div>
             </div>
             <div style="margin-top:var(--space-sm);padding:10px;background:var(--color-bg);border-radius:var(--radius-sm);font-size:0.85rem;display:flex;gap:var(--space-lg);">
@@ -210,7 +210,11 @@ setTimeout(function() { DateTimeToggle.initAll('#drawer-body .date-field input[t
 
 var INLINE_PLATFORM = {{ PLATFORM_SOURCES|list|tojson }};
 function isInlinePlat() { var s = document.querySelector('[name=\"source\"]').value||''; return INLINE_PLATFORM.indexOf(s)!==-1; }
-function toggleInlineFinance() { var p=isInlinePlat(); document.getElementById('inline-finance-platform').style.display=p?'':'none'; document.getElementById('inline-finance-direct').style.display=p?'none':''; calcInlineActual(); }
+function toggleInlineFinance() { var p=isInlinePlat(); document.getElementById('inline-finance-platform').style.display=p?'':'none'; document.getElementById('inline-finance-direct').style.display=p?'none':'';
+    // 隐藏区块必须 disabled，否则隐藏的 deposit/balance 仍会随表单提交，导致重复 name 覆盖可见输入（金额膨胀 bug）
+    document.getElementById('inline-deposit-plat').disabled=!p; document.getElementById('inline-pct').disabled=!p;
+    document.getElementById('inline-deposit-direct').disabled=p; document.getElementById('inline-balance-direct').disabled=p;
+    calcInlineActual(); }
 function calcInlineActual() {
     if(isInlinePlat()){ var income=parseFloat(document.getElementById('inline-deposit-plat').value)||0; var pct=parseFloat(document.getElementById('inline-pct').value)||0; var fee=Math.round(income*pct)/100; document.getElementById('inline-income').textContent='¥'+income.toFixed(2); document.getElementById('inline-fee').textContent=fee.toFixed(2); document.getElementById('inline-actual').textContent=(income-fee).toFixed(2); }
     else{ var d=parseFloat(document.getElementById('inline-deposit-direct').value)||0; var b=parseFloat(document.getElementById('inline-balance-direct').value)||0; document.getElementById('inline-total').textContent='¥'+(d+b).toFixed(2); document.getElementById('inline-actual2').textContent=(d+b).toFixed(2); }

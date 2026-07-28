@@ -21,8 +21,10 @@ function closeCenterModal() {
     var actEl = document.getElementById('center-modal-actions'); if (actEl) actEl.innerHTML = '';
     // 刷新日历
     if (window.calendar) window.calendar.refetchEvents();
-    // 刷新未排期池
-    htmx.ajax('GET', '/api/orders/unscheduled', { target: '#unscheduled-pool' });
+    // 刷新未排期池（#40 P2：仅日历页存在该容器，其余页面跳过，避免 htmx.ajax 拒绝产生 unhandled promise 噪音）
+    if (document.getElementById('unscheduled-pool')) {
+        htmx.ajax('GET', '/api/orders/unscheduled', { target: '#unscheduled-pool' });
+    }
     // 刷新甘特图（按当前视图 + 「仅进行中/显示全部」筛选重建，避免忽略筛选）
     if (typeof window.refreshGanttData === 'function') {
         window.refreshGanttData();
@@ -747,12 +749,84 @@ function initModuleCustomizer(pageKey) {
    初始化
    ═══════════════════════════════════════════════════════════ */
 
+/* ═══════════════════════════════════════════════════════
+   #41 自动检测更新
+   浏览器直连 GitHub Releases API（官方支持 CORS），不经 Flask 转发——
+   打包后用户机器未必有代理，服务端请求易失败；前端失败则静默降级。
+   自动检测每 24h 最多一次（localStorage 记时间戳），同一新版本只 Toast 一次；
+   设置页「检查更新」按钮走 checkForUpdate(true) 强制检测并展示结果。
+   ═══════════════════════════════════════════════════════ */
+
+// 语义化版本比较：容忍 v 前缀，逐段比数字；a > b 返 1，相等 0，小于 -1
+ function compareVersions(a, b) {
+    var pa = String(a || '').replace(/^v/i, '').split('.');
+    var pb = String(b || '').replace(/^v/i, '').split('.');
+    for (var i = 0; i < Math.max(pa.length, pb.length); i++) {
+        var na = parseInt(pa[i] || '0', 10) || 0;
+        var nb = parseInt(pb[i] || '0', 10) || 0;
+        if (na > nb) return 1;
+        if (na < nb) return -1;
+    }
+    return 0;
+}
+
+// 检测更新。force=true（设置页按钮）：忽略 24h 限制，结果写入 #update-check-result；
+// force=false（启动自检）：限频 + 发现新版 Toast，同一版本不重复提醒。
+function checkForUpdate(force) {
+    var current = window.__APP_VERSION;
+    var repo = window.__GITHUB_REPO;
+    if (!current || !repo) return;
+
+    var resultEl = document.getElementById('update-check-result');
+    if (!force) {
+        var last = 0;
+        try { last = parseInt(localStorage.getItem('updateCheckAt') || '0', 10); } catch (e) {}
+        if (Date.now() - last < 24 * 60 * 60 * 1000) return;
+    } else if (resultEl) {
+        resultEl.textContent = '检查中…';
+    }
+
+    fetch('https://api.github.com/repos/' + repo + '/releases/latest', {
+        headers: { 'Accept': 'application/vnd.github+json' }
+    }).then(function(res) {
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        return res.json();
+    }).then(function(rel) {
+        try { localStorage.setItem('updateCheckAt', String(Date.now())); } catch (e) {}
+        var latest = rel.tag_name || rel.name || '';
+        var pageUrl = rel.html_url || ('https://github.com/' + repo + '/releases');
+        var hasNew = latest && compareVersions(latest, current) > 0;
+
+        if (resultEl) {
+            if (hasNew) {
+                resultEl.innerHTML = '发现新版本 <strong>' + latest.replace(/[<>&"]/g, '') + '</strong>，' +
+                    '<a href="' + pageUrl + '" target="_blank" rel="noopener" style="color:var(--color-accent);text-decoration:underline;">前往下载</a>';
+            } else {
+                resultEl.textContent = '当前已是最新版本（v' + current + '）';
+            }
+        }
+
+        if (!force && hasNew) {
+            var notified = '';
+            try { notified = localStorage.getItem('updateNotifiedVersion') || ''; } catch (e) {}
+            if (notified !== latest) {
+                try { localStorage.setItem('updateNotifiedVersion', latest); } catch (e) {}
+                showToast('发现新版本 ' + latest + '，可在设置 → 系统 中查看', 'info');
+            }
+        }
+    }).catch(function(err) {
+        // 离线/限流/无 Release 等均静默降级；仅手动检查时展示失败原因
+        if (force && resultEl) resultEl.textContent = '检查失败（网络不可用或 GitHub 限流），请稍后重试';
+    });
+}
+
 document.addEventListener('DOMContentLoaded', function() {
     // 甘特图: index.html 内联 | 日历: calendar.html 内联
     initKanban();
     initSidebarState();
     initImageUpload();
     initModuleCustomizer(location.pathname);   // P16h 统计模块自定义显隐
+    checkForUpdate(false);                     // #41 启动自检更新（24h 限频，失败静默）
 });
 
 /* ═══════════════════════════════════════════════════════════

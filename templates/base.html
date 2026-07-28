@@ -197,6 +197,8 @@
 
     <!-- P18-F4.4：快捷键映射注入（app.js 统一 keydown 分发器读取） -->
     <script>window.__SHORTCUTS = {{ shortcuts|tojson }};</script>
+    <!-- #41：版本号与上传版仓库注入（app.js 更新检测读取） -->
+    <script>window.__APP_VERSION = {{ APP_VERSION|tojson }}; window.__GITHUB_REPO = {{ GITHUB_REPO|tojson }};</script>
     <script src="{{ url_for('static', filename='app.js') }}"></script>
     <script src="{{ url_for('static', filename='datetime-toggle.js') }}"></script>
     <script>

@@ -878,7 +878,8 @@ def _auto_calc_ddl_status(data: dict):
 
     if end_str and end_str.strip():
         try:
-            end_date = dt_date.fromisoformat(end_str)
+            # #40 P1：精确时间模式存的是 'YYYY-MM-DDTHH:MM'，取前 10 位统一按日期解析
+            end_date = dt_date.fromisoformat(end_str.strip()[:10])
             diff = (end_date - today).days
             if diff < 0:
                 data['ddl_status'] = ddl_overdue
@@ -887,6 +888,7 @@ def _auto_calc_ddl_status(data: dict):
             else:
                 data['ddl_status'] = ddl_normal
         except (ValueError, TypeError):
+            logging.warning("_compute_ddl_status: 无法解析 scheduled_end=%r，ddl_status 回退正常", end_str)
             data['ddl_status'] = ddl_normal
     else:
         data['ddl_status'] = ddl_normal
@@ -907,7 +909,7 @@ def _calc_financials(data: dict) -> dict:
     """
     deposit = float(data.get('deposit', 0) or 0)
     balance = float(data.get('balance', 0) or 0)
-    income = deposit + balance
+    income = round(deposit + balance, 2)  # #40 P4：浮点相加落库前舍入（0.1+0.2 问题）
     data['income'] = income
 
     source = data.get('source', '')
@@ -923,7 +925,7 @@ def _calc_financials(data: dict) -> dict:
         if pct is not None and float(pct or 0) > 0:
             data['platform_fee'] = round(income * float(pct) / 100, 2)
         else:
-            data['platform_fee'] = float(data.get('platform_fee', 0) or 0)
+            data['platform_fee'] = round(float(data.get('platform_fee', 0) or 0), 2)  # #40 P4：直填金额路径同样舍入
 
     data['actual_received'] = round(data['income'] - data['platform_fee'], 2)
     return data
@@ -1088,9 +1090,11 @@ def update_order(order_id: int, data: dict) -> bool:
         merged = {**existing, **data}
         if needs_financials:
             # P19-F9 快照规则：显式提交 platform_fee_pct → 用之并随单落库；
-            # 仅切换来源未给 pct → 按新来源默认费率刷新快照；
-            # 两者皆无 → merged 继承 existing 快照原样保留（未显式变更不改写）。
-            if 'source' in keys and 'platform_fee_pct' not in keys:
+            # 切换来源且合并后 pct 为 None（未指定）→ 按新来源默认费率刷新快照；
+            # 否则 → merged 继承 existing 快照原样保留（未显式变更不改写）。
+            # #40 P3：编辑路由总会传 platform_fee_pct 键（留空为 None），
+            # 改用值判断而非键存在性，修复切回平台来源默认费率不生效。
+            if 'source' in keys and merged.get('platform_fee_pct') is None:
                 merged['platform_fee_pct'] = get_default_fee_for_source(merged.get('source') or '')
             merged = _calc_financials(merged)
         if needs_ddl:
@@ -2511,19 +2515,28 @@ def _fill_monthly_result(rows, months, value_key):
 # ═══════════════════════════════════════════════════════════
 
 def create_customer(data: dict) -> int:
-    """创建客户"""
+    """创建客户
+
+    #40 P3：UNIQUE 冲突转应用层 ValueError（路由返 400），
+    try/finally 保证异常路径连接也关闭。
+    """
     conn = get_db()
-    cur = conn.execute(
-        """INSERT INTO customers (name, platform_url, preferences, notes, tags)
-           VALUES (?, ?, ?, ?, ?)""",
-        (data['name'], data.get('platform_url', ''),
-         data.get('preferences', ''), data.get('notes', ''),
-         data.get('tags', ''))
-    )
-    cid = cur.lastrowid
-    conn.commit()
-    conn.close()
-    return cid
+    try:
+        cur = conn.execute(
+            """INSERT INTO customers (name, platform_url, preferences, notes, tags)
+               VALUES (?, ?, ?, ?, ?)""",
+            (data['name'], data.get('platform_url', ''),
+             data.get('preferences', ''), data.get('notes', ''),
+             data.get('tags', ''))
+        )
+        cid = cur.lastrowid
+        conn.commit()
+        return cid
+    except sqlite3.IntegrityError:
+        logging.error("create_customer: 客户名已存在 name=%r", data.get('name'))
+        raise ValueError('客户名已存在')
+    finally:
+        conn.close()
 
 
 def get_customer(customer_id: int) -> dict | None:

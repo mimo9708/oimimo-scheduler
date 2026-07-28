@@ -1041,6 +1041,12 @@ tbody tr:hover {
     gap: var(--space-md);
 }
 
+/* grid 子项默认 min-width:auto，date 输入框固有宽度会把列顶出容器（排期信息溢出 bug） */
+.form-row > *,
+.form-row-3 > * { min-width: 0; }
+.dt-toggle-wrap input[type="date"],
+.dt-toggle-wrap input[type="datetime-local"] { min-width: 0; }
+
 .form-actions {
     display: flex;
     gap: var(--space-sm);
