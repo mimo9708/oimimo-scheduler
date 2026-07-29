@@ -102,7 +102,7 @@
             <div class="form-group">
                 <label>手续费 (%)</label>
                 <input type="number" name="platform_fee_pct" step="0.1" min="0" max="100"
-                       value="{{ '%.1f'|format(order.platform_fee_pct) if order.platform_fee_pct else '5' }}" oninput="calcModalEditActual()" id="modal-edit-pct" {{ 'disabled' if not is_plat }}>
+                       value="{{ '%.1f'|format(order.platform_fee_pct if order.platform_fee_pct else DEFAULT_FEES.get(order.source, 5)) }}" oninput="calcModalEditActual()" id="modal-edit-pct" {{ 'disabled' if not is_plat }}>
             </div>
         </div>
         <div style="margin-top:var(--space-sm);padding:10px;background:var(--color-bg);border-radius:var(--radius-sm);font-size:0.85rem;display:flex;gap:var(--space-lg);">
@@ -195,11 +195,16 @@ setTimeout(function() { DateTimeToggle.initAll('#center-modal-body .date-field i
 })();
 
 var MODAL_EDIT_PLATFORM = {{ PLATFORM_SOURCES|list|tojson }};
+var MODAL_EDIT_FEES = {{ DEFAULT_FEES|tojson }};
+// #43：初始 lastSource = 当前来源，打开编辑不覆盖快照；只有真正切换来源才填入设置的默认费率
+var modalEditLastSource = document.querySelector('[name="source"]').value||'';
 function isModalEditPlat() { var s = document.querySelector('[name="source"]').value||''; return MODAL_EDIT_PLATFORM.indexOf(s)!==-1; }
 function toggleModalEditFinance() { var p=isModalEditPlat(); document.getElementById('modal-edit-finance-platform').style.display=p?'':'none'; document.getElementById('modal-edit-finance-direct').style.display=p?'none':'';
     // 隐藏区块必须 disabled，否则隐藏的 deposit/balance 仍会随表单提交，导致重复 name 覆盖可见输入（金额膨胀 bug）
     document.getElementById('modal-edit-deposit-plat').disabled=!p; document.getElementById('modal-edit-pct').disabled=!p;
     document.getElementById('modal-edit-deposit-direct').disabled=p; document.getElementById('modal-edit-balance-direct').disabled=p;
+    var s=document.querySelector('[name="source"]').value||'';
+    if(s!==modalEditLastSource){ if(p && MODAL_EDIT_FEES[s]!==undefined) document.getElementById('modal-edit-pct').value=MODAL_EDIT_FEES[s].toFixed(1); modalEditLastSource=s; }
     calcModalEditActual(); }
 function calcModalEditActual() {
     if(isModalEditPlat()){ var income=parseFloat(document.getElementById('modal-edit-deposit-plat').value)||0; var pct=parseFloat(document.getElementById('modal-edit-pct').value)||0; var fee=Math.round(income*pct)/100; document.getElementById('modal-edit-income').textContent='¥'+income.toFixed(2); document.getElementById('modal-edit-fee').textContent=fee.toFixed(2); document.getElementById('modal-edit-actual').textContent=(income-fee).toFixed(2); }

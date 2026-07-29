@@ -86,7 +86,7 @@ UPLOAD_ORDERS_DIR = os.path.join(UPLOAD_DIR, 'orders')
 # ═══════════════════════════════════════════════════════════
 
 # #41 当前应用版本（发版时与上传版 CHANGELOG/installer.iss/git tag 保持一致）
-APP_VERSION = '1.1.0'
+APP_VERSION = '1.2.0'
 # #41 上传版 GitHub 仓库（前端直连其 Releases API 检测新版本）
 GITHUB_REPO = 'mimo9708/oimimo-scheduler'
 
@@ -214,6 +214,11 @@ def _sanitize_theme_css(css: str):
     return css, None
 
 
+# #45 R2：阶段中文标签 → CSS slug（与 db.py stage_class 过滤器对齐）
+STAGE_LABEL_TO_SLUG = {'待开始': 'pending', '色稿': 'sketch', '线稿': 'lineart',
+                       '细化': 'detail', '收尾': 'finish', '完成': 'completed', '退单': 'cancelled'}
+
+
 def _build_theme_css(settings: dict) -> str:
     """将设置转为 CSS 变量覆盖"""
     mapping = {
@@ -228,13 +233,6 @@ def _build_theme_css(settings: dict) -> str:
         'theme_success': '--color-success',
         'theme_warning': '--color-warning',
         'theme_danger': '--color-danger',
-        'stage_pending': '--stage-pending',
-        'stage_sketch': '--stage-sketch',
-        'stage_lineart': '--stage-lineart',
-        'stage_detail': '--stage-detail',
-        'stage_finish': '--stage-finish',
-        'stage_completed': '--stage-completed',
-        'stage_cancelled': '--stage-cancelled',
     }
     lines = []
     # 外观设置
@@ -252,14 +250,19 @@ def _build_theme_css(settings: dict) -> str:
             val = settings[key]
             lines.append(f"    {css_var}: {val};")
             # 自动生成背景色（bg 变体 = 原色 + 低透明度）
-            if key.startswith('stage_'):
-                lines.append(f"    {css_var}-bg: color-mix(in srgb, {val} 12%, transparent);")
-            elif key == 'theme_success':
+            if key == 'theme_success':
                 lines.append(f"    --color-success-bg: color-mix(in srgb, {val} 12%, transparent);")
             elif key == 'theme_warning':
                 lines.append(f"    --color-warning-bg: color-mix(in srgb, {val} 12%, transparent);")
             elif key == 'theme_danger':
                 lines.append(f"    --color-danger-bg: color-mix(in srgb, {val} 12%, transparent);")
+    # #45 R2：阶段色统一由「着色模式·按阶段」面板管理。
+    # 读取链：cal_stage_<中文> > 旧 stage_<slug>（老用户存量值）> app.css 内置默认
+    for _label, _slug in STAGE_LABEL_TO_SLUG.items():
+        _val = settings.get(f'cal_stage_{_label}') or settings.get(f'stage_{_slug}')
+        if _val:
+            lines.append(f"    --stage-{_slug}: {_val};")
+            lines.append(f"    --stage-{_slug}-bg: color-mix(in srgb, {_val} 12%, transparent);")
     root_block = ':root {\n' + '\n'.join(lines) + '\n}' if lines else ''
     # html 背景双写：全量刷新跳转间隙 html 底色随主题同步，避免黑屏/白闪
     # （静态 app.css 提供默认底色 var(--color-bg)，此处 theme_css 覆盖为当前主题底色）
@@ -280,6 +283,7 @@ DEFAULT_SHORTCUTS = {
     'new_order': 'Ctrl+N',
     'focus_search': 'Ctrl+K',
     'toggle_sidebar': 'Ctrl+B',
+    'save_settings': 'Ctrl+S',
     'close': 'Escape',
     'nav_home': 'g h',
     'nav_income': 'g i',
@@ -294,6 +298,7 @@ SHORTCUT_LABELS = {
     'new_order': '新建订单',
     'focus_search': '聚焦搜索框',
     'toggle_sidebar': '切换侧边栏',
+    'save_settings': '保存全部（仅设置页）',
     'close': '关闭弹窗/抽屉',
     'nav_home': '跳转 · 主页',
     'nav_income': '跳转 · 收入看板',
@@ -343,6 +348,7 @@ def inject_constants():
         'COMMISSION_TYPE_CHOICES': db.get_choices('commission_type'),
         'STAGE_CLASS_MAP': STAGE_CLASS_MAP,
         'PLATFORM_SOURCES': platform_sources,
+        'DEFAULT_FEES': db.get_default_fees_map(),  # #43：表单选平台后自动填入默认费率
         'theme_css': _build_theme_css(settings),
         'settings': settings,
         'shortcuts': merge_shortcuts(settings),
@@ -396,6 +402,7 @@ def income_dashboard():
                            monthly_projected=monthly_projected,
                            cumulative_income=cumulative,
                            type_distribution=distribution,
+                           commission_colors=db.get_merged_palette('commission'),  # #43：品类甜甜圈与日历着色同源
                            top_customers=top_customers)
 
 
@@ -413,7 +420,8 @@ def api_type_distribution():
 @app.route('/calendar')
 def calendar_view():
     unscheduled = db.get_unscheduled_orders()
-    color_mode = request.args.get('color', 'source')  # 默认按来源着色
+    # #45 R1：URL 显式 ?color= 优先（分享/书签），否则读用户偏好，最后回落按来源
+    color_mode = request.args.get('color') or db.get_all_settings().get('calendar_color_mode', 'source')
     # P13b F1 级联筛选：维度 → 值列表
     filter_options = {
         'stage': db.get_choices('stage'),
@@ -1425,13 +1433,7 @@ THEME_COLORS = [
     ('theme_success', '成功/绿色', '语义色'),
     ('theme_warning', '警告/橙色', '语义色'),
     ('theme_danger', '危险/红色', '语义色'),
-    ('stage_pending', '阶段：待开始', '阶段色'),
-    ('stage_sketch', '阶段：色稿', '阶段色'),
-    ('stage_lineart', '阶段：线稿', '阶段色'),
-    ('stage_detail', '阶段：细化', '阶段色'),
-    ('stage_finish', '阶段：收尾', '阶段色'),
-    ('stage_completed', '阶段：完成', '阶段色'),
-    ('stage_cancelled', '阶段：退单', '阶段色'),
+    # #45 R2：「阶段色」分组已移除，阶段配色统一由「着色模式·按阶段」面板管理
 ]
 
 
@@ -1475,13 +1477,24 @@ def settings_page():
     # 每个 mode 的默认调色板
     default_palettes = db.CALENDAR_PALETTES
 
+    # #42：source/commission 是可自定义列表，色板行改为遍历实际 choices（含自定义项），
+    # 默认色从 CALENDAR_PALETTES 取，取不到兜底灰（与 get_orders_for_calendar 的 default_color 一致）
+    # #45 R2：stage 同法——自定义新增阶段也进面板，默认灰，改色后存 cal_stage_<名>
+    custom_mode_labels = {
+        'source': db.get_choices('source'),
+        'commission': db.get_choices('commission_type'),
+        'stage': db.get_choices('stage'),
+    }
+
     cal_palettes = {}
     for mode in cal_modes:
         mid = mode['id']
         prefix = f'cal_{mid}_'
         items = []
         defaults = default_palettes.get(mid, {})
-        for label, default_color in defaults.items():
+        labels = custom_mode_labels.get(mid) or list(defaults.keys())
+        for label in labels:
+            default_color = defaults.get(label, '#b0b0aa')
             items.append({
                 'key': f'{prefix}{label}',
                 'label': label,
@@ -1501,10 +1514,18 @@ def settings_page():
     active_custom_theme = all_settings.get('active_custom_theme', '')
     theme_err = request.args.get('theme_err', '')
 
+    # #45 R5：配色预设（整套 cal_* 配色命名保存/切换）；#47 记录使用中预设
+    palette_presets = _load_palette_presets(all_settings)
+    palette_err = request.args.get('palette_err', '')
+    palette_active_id = all_settings.get('palette_active_id', '')
+
     return render_template('settings.html',
                            custom_themes=custom_themes,
                            active_custom_theme=active_custom_theme,
                            theme_err=theme_err,
+                           palette_presets=palette_presets,
+                           palette_err=palette_err,
+                           palette_active_id=palette_active_id,
                            preset_themes=preset_themes,
                            groups=groups,
                            cal_modes=cal_modes,
@@ -1554,6 +1575,15 @@ def reset_settings_route():
     return redirect(url_for('settings_page'))
 
 
+# ── #45 R1 日历着色模式偏好（微端点：避开 save_settings 对 platform_sources 的无条件重写） ──
+@app.post('/settings/color-mode')
+def save_color_mode():
+    mode = (request.form.get('mode') or '').strip()
+    if mode in ('source', 'stage', 'ddl', 'payment', 'commission'):
+        db.update_settings({'calendar_color_mode': mode})
+    return ('', 204)
+
+
 # ── P16j 自定义主题：导入 / 选用 / 删除 ──
 @app.post('/settings/theme/import')
 def import_custom_theme():
@@ -1596,6 +1626,86 @@ def delete_custom_theme():
     updates = {'custom_themes': json.dumps(themes, ensure_ascii=False)}
     if settings.get('active_custom_theme') == tid:
         updates['active_custom_theme'] = ''
+    db.update_settings(updates)
+    return redirect(url_for('settings_page'))
+
+
+# ── #45 R5 配色预设：保存 / 选用 / 删除（仿 P16j 自定义主题三端点） ──
+def _load_palette_presets(settings: dict):
+    """解析 settings['palette_presets']（JSON 列表 [{id,name,colors}]），异常回退空列表。"""
+    raw = settings.get('palette_presets', '')
+    if not raw:
+        return []
+    try:
+        presets = json.loads(raw)
+        return [p for p in presets
+                if isinstance(p, dict) and p.get('id') and isinstance(p.get('colors'), dict)]
+    except Exception as e:
+        logging.error(f'palette_presets 解析失败: {e}')
+        return []
+
+
+@app.post('/settings/palette/save')
+def save_palette_preset():
+    """把当前全部 cal_* 配色（五种模式所有标签色）打包命名保存为一套预设。"""
+    name = (request.form.get('palette_name') or '').strip()
+    if not name:
+        return redirect(url_for('settings_page', palette_err='请填写预设名称'))
+    settings = db.get_all_settings()
+    # 只收 cal_ 前缀配色键；模式偏好 calendar_color_mode 是行为设置，不属于配色方案
+    colors = {k: v for k, v in settings.items() if k.startswith('cal_')}
+    presets = _load_palette_presets(settings)
+    pid = 'palette_%d' % int(time.time() * 1000)
+    presets.append({'id': pid, 'name': name, 'colors': colors})
+    # #47：新存预设即当前配色，标记为使用中
+    db.update_settings({
+        'palette_presets': json.dumps(presets, ensure_ascii=False),
+        'palette_active_id': pid,
+    })
+    return redirect(url_for('settings_page'))
+
+
+@app.post('/settings/palette/apply')
+def apply_palette_preset():
+    """选用一套配色预设：整套覆盖写回当前 cal_* 值，立即生效。"""
+    pid = request.form.get('palette_id') or ''
+    settings = db.get_all_settings()
+    for p in _load_palette_presets(settings):
+        if p.get('id') == pid:
+            updates = dict(p['colors'])
+            updates['palette_active_id'] = pid  # #47：记录使用中预设
+            db.update_settings(updates)
+            break
+    return redirect(url_for('settings_page'))
+
+
+@app.post('/settings/palette/update')
+def update_palette_preset():
+    """#47：把当前已保存的 cal_* 配色覆盖写回指定预设（名称不变，原地更新）。"""
+    pid = request.form.get('palette_id') or ''
+    settings = db.get_all_settings()
+    presets = _load_palette_presets(settings)
+    colors = {k: v for k, v in settings.items() if k.startswith('cal_')}
+    for p in presets:
+        if p.get('id') == pid:
+            p['colors'] = colors
+            db.update_settings({
+                'palette_presets': json.dumps(presets, ensure_ascii=False),
+                'palette_active_id': pid,
+            })
+            break
+    return redirect(url_for('settings_page'))
+
+
+@app.post('/settings/palette/delete')
+def delete_palette_preset():
+    """删除一套配色预设（不影响当前生效颜色）。"""
+    pid = request.form.get('palette_id') or ''
+    settings = db.get_all_settings()
+    presets = [p for p in _load_palette_presets(settings) if p.get('id') != pid]
+    updates = {'palette_presets': json.dumps(presets, ensure_ascii=False)}
+    if settings.get('palette_active_id') == pid:
+        updates['palette_active_id'] = ''  # #47：删除使用中预设时清除标记
     db.update_settings(updates)
     return redirect(url_for('settings_page'))
 

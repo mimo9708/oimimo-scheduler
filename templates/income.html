@@ -245,6 +245,23 @@ function updateParam(key, value) {
     });
 
     // 品类分布甜甜圈
+    // #43：颜色与日历「品类」着色同源（设置页可配，键 cal_commission_*），未配色品类回退循环色
+    var COMMISSION_COLORS = {{ commission_colors|tojson }};
+    // #42：品类可自定义（可能超过 8 个），回退色按未配色序号生成：
+    // 基础 8 色循环，第二轮起叠加透明度做变体，避免写死数组导致超出后颜色重复难辨
+    var TYPE_CHART_BASE_COLORS = ['#2a78d6','#1baf7a','#eda100','#008300','#4a3aa7','#e34948','#e87ba4','#eb6834'];
+    function typeChartFallback(i) {
+        var alphas = ['', 'b3', '66'];
+        var base = TYPE_CHART_BASE_COLORS[i % TYPE_CHART_BASE_COLORS.length];
+        var round = Math.floor(i / TYPE_CHART_BASE_COLORS.length);
+        return base + alphas[round % alphas.length];
+    }
+    function typeChartColors(labels) {
+        var miss = 0;
+        return labels.map(function(label) {
+            return COMMISSION_COLORS[label] || typeChartFallback(miss++);
+        });
+    }
     var typeChart = new Chart(document.getElementById('type-chart').getContext('2d'), {
         type: 'doughnut',
         data: {
@@ -253,7 +270,7 @@ function updateParam(key, value) {
                 data: {{ type_distribution|map(attribute='cnt')|list|tojson }},
                 gross: {{ type_distribution|map(attribute='gross')|list|tojson }},
                 net: {{ type_distribution|map(attribute='net')|list|tojson }},
-                backgroundColor: ['#2a78d6','#1baf7a','#eda100','#008300','#4a3aa7','#e34948','#e87ba4','#eb6834'],
+                backgroundColor: typeChartColors({{ type_distribution|map(attribute='commission_type')|list|tojson }}),
                 borderWidth: 2, borderColor: '#fff',
             }]
         },
@@ -281,6 +298,7 @@ function updateParam(key, value) {
             typeChart.data.datasets[0].data = data.map(function(d) { return d.cnt; });
             typeChart.data.datasets[0].gross = data.map(function(d) { return d.gross; });
             typeChart.data.datasets[0].net = data.map(function(d) { return d.net; });
+            typeChart.data.datasets[0].backgroundColor = typeChartColors(typeChart.data.labels);  // #43：按品类配置取色，类别集变化时同步重建
             typeChart.update();
         });
     });

@@ -143,6 +143,8 @@ main()
 | POST `/settings` | 保存全部设置（同事务跑 choices 重命名同步） |
 | POST `/settings/reset` | 恢复默认（DELETE + `_ensure_default_settings`） |
 | POST `/settings/theme/import` · `/apply` · `/delete` | 自定义主题 CSS 导入/应用/删除 |
+| POST `/settings/color-mode` | #45 R1：着色模式持久化（白名单校验写 `calendar_color_mode`，恒返 204） |
+| POST `/settings/palette/save` · `/apply` · `/update` · `/delete` | #45 R5：配色预设（整套 `cal_*` 键存 `palette_presets` JSON）保存/选用/删除；#47 `/update` 原地覆盖更新指定预设 |
 | POST `/export/orders` | Markdown 全量导出 → `exports/全部订单.md` |
 | GET `/export/open-folder` | 系统调用打开导出目录 |
 | POST `/api/import/mihuashi` | 浏览器插件导入（`_is_local_origin` 校验，否则 403） |
@@ -260,7 +262,7 @@ helper：`is_terminal_stage` / `is_refund_stage` / `get_done_stage` / `get_refun
 
 ### 6.7 主题与外观
 
-`_build_theme_css(settings)`：theme_*（11 键）+ stage_*（7 键）→ CSS 变量覆盖 + color-mix 派生 `*-bg`；字体 `font_size`/`font_family`。自定义主题：`_load_custom_themes`（settings.custom_themes JSON 列表 + active_custom_theme）→ 导入时 `_sanitize_theme_css` 消毒（剥危险语法），apply/delete 路由管理。快捷键：`shortcuts_json` + `merge_shortcuts()` 合并默认。
+`_build_theme_css(settings)`：theme_*（11 键）→ CSS 变量覆盖 + color-mix 派生 `*-bg`；阶段色 `--stage-*`（#45 R2）经 `STAGE_LABEL_TO_SLUG` 映射按读取链 `cal_stage_<中文>` > 旧 `stage_<slug>`（存量回退）> app.css 默认生成，唯一配置入口为设置页「着色模式→按阶段」面板；字体 `font_size`/`font_family`。自定义主题：`_load_custom_themes`（settings.custom_themes JSON 列表 + active_custom_theme）→ 导入时 `_sanitize_theme_css` 消毒（剥危险语法），apply/delete 路由管理。配色预设（#45 R5）：`palette_presets` JSON 列表，整套 `cal_*` 键命名保存/选用/删除；#47 增 `/update` 原地更新 + `palette_active_id` 使用中标记（save/apply/update 写入，删使用中预设时清空）。快捷键：`shortcuts_json` + `merge_shortcuts()` 合并默认。
 
 ### 6.8 订单模板
 
@@ -322,12 +324,13 @@ helper：`is_terminal_stage` / `is_refund_stage` / `get_done_stage` / `get_refun
 | 分组 | 键模式 | 数量 | 说明 |
 |---|---|---|---|
 | 全局主题 | `theme_*` | 11 | bg/surface/sidebar/text/text_secondary/border/accent/link/success/warning/danger |
-| 阶段色 | `stage_*` | 7 | pending/sketch/lineart/detail/finish/completed/cancelled |
-| 日历调色板 | `cal_{mode}_{label}` | ~31 | 5 模式（stage/source/ddl/payment/commission）× 各值独立色 |
+| 阶段色（旧） | `stage_*` | 7 | #45 R2 后仅作读取回退，设置页不再写入；新值落 `cal_stage_*` |
+| 日历调色板 | `cal_{mode}_{label}` | ~31 | 5 模式（stage/source/ddl/payment/commission）× 各值独立色；`cal_stage_*` 兼为全站阶段色唯一配置源 |
+| 着色模式 | `calendar_color_mode` | 1 | #45 R1：日历着色模式持久化（source/stage/ddl/payment/commission） |
 | 选择列表 | `stage_list` · `payment_status_list` · `source_list` · `commission_type_list` | 4 | 用户自定义列表（合并语义 base） |
 | 平台/费率 | `platform_sources` · `platform_fee_{src}` · `default_fee_{src}` | ~10 | 平台来源集合；fee 历史键与 default_fee 新键并存 |
 | 外观 | `font_size` · `font_family` | 2 | 4 档字号 / 3 种字体 |
-| 主题扩展 | `custom_themes` · `active_custom_theme` | 2 | 自定义主题 JSON 列表 + 当前应用 |
+| 主题扩展 | `custom_themes` · `active_custom_theme` · `palette_presets` · `palette_active_id` | 4 | 自定义主题 JSON 列表 + 当前应用 + 配色预设 JSON 列表（#45 R5）+ 使用中预设 id（#47） |
 | 快捷键 | `shortcuts_json` | 1 | 用户快捷键覆盖 |
 | 其他 | `api_token` · `schedule_conflict_threshold` | 2 | API 预留 / 排期冲突阈值 |
 

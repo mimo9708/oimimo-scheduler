@@ -621,6 +621,23 @@ def get_default_fee_for_source(source: str) -> float:
         return 5.0
 
 
+def get_default_fees_map() -> dict:
+    """#43：全部平台来源的默认费率映射 {source: pct}，供前端表单联动填充。
+    非平台来源不入表（前端取不到 → 费率区隐藏/不填）。"""
+    fees = {}
+    try:
+        settings = get_all_settings()
+    except Exception as e:
+        logging.error(f'get_default_fees_map 读取设置失败: {e}')
+        settings = {}
+    for src in get_platform_sources():
+        try:
+            fees[src] = float(settings.get(f'default_fee_{src}', '5') or 5)
+        except (TypeError, ValueError):
+            fees[src] = 5.0
+    return fees
+
+
 def resnapshot_fee_for_renamed_source(conn, order_ids: list, new_source: str) -> int:
     """P19-F9 来源重命名级联：受影响订单 pct 快照刷新为新来源默认费率，
     并按快照重算 platform_fee / actual_received（income 不变），涉及客户统计同步重算。
@@ -922,6 +939,11 @@ def _calc_financials(data: dict) -> dict:
         # P19-F9：pct 快照保留在 data 中随单落库（不再 pop）。
         # pct>0 → 按快照重算手续费；pct 空/0 → 保留传入 platform_fee（兼容直填金额旧路径）。
         pct = data.get('platform_fee_pct')
+        if pct is None and not float(data.get('platform_fee', 0) or 0):
+            # #42：创建路径 pct 缺省且无直填金额时回填来源默认费率
+            #（编辑路径切换来源已在 update_order 兜底，这里补齐新单漏洞）
+            pct = get_default_fee_for_source(source)
+            data['platform_fee_pct'] = pct
         if pct is not None and float(pct or 0) > 0:
             data['platform_fee'] = round(income * float(pct) / 100, 2)
         else:
@@ -1606,6 +1628,20 @@ CALENDAR_COLOR_FIELDS = {
 }
 
 
+def get_merged_palette(color_mode: str) -> dict:
+    """#43：合并默认调色板 + 用户自定义设置（键 `cal_<mode>_<标签>`），返回 {标签: 颜色}。
+    日历着色与收入页品类甜甜圈共用此一套配置（单一数据源，跳页同色）。"""
+    palette = dict(CALENDAR_PALETTES.get(color_mode, CALENDAR_PALETTES['stage']))
+    prefix = f'cal_{color_mode}_'
+    try:
+        for k, v in get_all_settings().items():
+            if k.startswith(prefix):
+                palette[k[len(prefix):]] = v
+    except Exception as e:
+        logging.error(f'get_merged_palette 读取设置失败 (mode={color_mode}): {e}')
+    return palette
+
+
 def _calendar_filter_sql(filters: dict | None) -> tuple:
     """P13b F1 级联筛选：阶段/来源/类别/客户/收款状态 → (where 片段列表, params)"""
     where, params = [], []
@@ -1637,17 +1673,8 @@ def get_orders_for_calendar(color_mode: str = 'source', filters: dict | None = N
     show_archived: P16d 日历归档显隐开关。False（默认）仅取 is_archived=0；
                    True 纳入已归档（已完成+退单）项目。
     """
-    # 合并默认调色板 + 用户自定义设置
-    base_palette = dict(CALENDAR_PALETTES.get(color_mode, CALENDAR_PALETTES['stage']))
-    prefix = f'cal_{color_mode}_'
-    try:
-        all_settings = get_all_settings()
-        for k, v in all_settings.items():
-            if k.startswith(prefix):
-                label = k[len(prefix):]
-                base_palette[label] = v
-    except Exception:
-        pass
+    # 合并默认调色板 + 用户自定义设置（与收入页品类着色同源，见 get_merged_palette）
+    base_palette = get_merged_palette(color_mode)
 
     field = CALENDAR_COLOR_FIELDS.get(color_mode, 'current_stage')
     default_color = '#b0b0aa'
@@ -2187,7 +2214,7 @@ def metric_type_distribution(conn=None, year: int = None, month: int = None) -> 
     """品类分布（P20-F17：已完成订单 is_archived=1 且 commission_type 非空，看售出结果）。
     每品类：cnt 单数 / gross=SUM(income) 应收（毛）/ net=SUM(actual_received) 实收（净）。
 
-    year/month: 可选筛选，按排期月份（scheduled_start）过滤。
+    year/month: 可选筛选，按排期月份（scheduled_start）过滤；未排期单不计入统计。
     """
     c, close = _metric_conn(conn)
     where_parts = ["is_archived = 1", "commission_type IS NOT NULL", "commission_type != ''"]

@@ -85,9 +85,9 @@
 
 `app._build_theme_css(settings)` 在每次请求渲染 `<style>` 注入 base.html，覆盖 app.css 默认值：
 
-- settings 键：`theme_*`（11 个：bg/surface/sidebar/text/text_secondary/border/accent/link/success/warning/danger）+ `stage_*`（7 个阶段色）→ 映射到上表 token。
+- settings 键：`theme_*`（11 个：bg/surface/sidebar/text/text_secondary/border/accent/link/success/warning/danger）→ 映射到上表 token；阶段色（#45 R2）经 `STAGE_LABEL_TO_SLUG` 映射按读取链 `cal_stage_<中文>` > 旧 `stage_<slug>`（存量回退）> app.css 默认生成 `--stage-*`。
 - **bg 派生**：`color-mix(in srgb, <色> 12%, transparent)` 自动生成 `--stage-*-bg` 与 `--color-{success,warning,danger}-bg`。
-- 设置页「主题设置」Tab 提供 3 组 18 色调色行（ColorPicker 取色）。
+- 设置页「主题设置」Tab：全局主题色 11 色调色行（ColorPicker 取色）；阶段色已移入「着色模式→按阶段」面板统一管理（#45 R2）。
 
 ### 3.2 自定义主题（P16j）
 
@@ -95,9 +95,11 @@
 - 导入：`POST /settings/theme/import` 粘贴 CSS → `_sanitize_theme_css()` 消毒后存为预设；apply/delete 路由切换与删除。
 - `_load_custom_themes()` 合并进设置页预设列表。
 
-### 3.3 日历着色子主题
+### 3.3 着色模式（原日历着色子主题）
 
 5 种着色模式 `CALENDAR_PALETTES`（stage/source/ddl/payment/commission），每种模式的每个值一行 ColorPicker，落库为 `cal_{mode}_{label}` 键（实测 ~31 键）。事件着色优先级：订单 `custom_color` > settings 调色板 > 内置默认 > `#b0b0aa`。
+
+#45 后：设置页卡片更名「着色模式」，配色统一作用于日历/订单徽章/收入图表；「按阶段」面板遍历实际阶段 choices（自定义新增阶段默认灰 `#b0b0aa`，改色后存 `cal_stage_<名>`）；日历着色模式选择持久化于 `calendar_color_mode`（R1）；整套 `cal_*` 配色可命名保存为配色预设 `palette_presets`，支持选用/删除（R5）。
 
 ### 3.4 外观
 
@@ -196,7 +198,7 @@
 |---|---|
 | Tokens 默认值 | `static/app.css` `:root` |
 | Tokens 运行时覆盖 | `app._build_theme_css()` → base.html `<style>` |
-| 阶段色/语义色 | CSS 变量 → `_build_theme_css` 映射 ← settings `stage_*`/`theme_*` |
+| 阶段色/语义色 | CSS 变量 → `_build_theme_css` 映射 ← settings `cal_stage_*`（旧 `stage_*` 回退）/`theme_*` |
 | 日历调色板 | `db.CALENDAR_PALETTES` 默认 + settings `cal_*` 覆盖 |
 | 组件样式分区 | app.css 注释分区（Sidebar/Cards/Stats/Table/Badges/Buttons/Forms/Detail Grid/Calendar/Kanban/Gantt/Gallery…） |
 | 交互动效 | `static/app.js`（Toast/模态/抽屉/ColorPicker/模块定制器） |

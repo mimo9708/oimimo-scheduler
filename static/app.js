@@ -114,6 +114,11 @@ document.addEventListener('keydown', function(e) {
             case 'toggle_sidebar':
                 if (typeof toggleSidebar === 'function') toggleSidebar();
                 break;
+            case 'save_settings':
+                // #48：仅设置页存在 #settings-form 时生效；用 requestSubmit 触发 submit 事件（快捷键序列化依赖它）
+                var sf = document.getElementById('settings-form');
+                if (sf) { sf.requestSubmit ? sf.requestSubmit() : sf.submit(); }
+                break;
             default:
                 if (NAV_URLS[func]) window.location.href = NAV_URLS[func];
         }
@@ -125,6 +130,11 @@ document.addEventListener('keydown', function(e) {
         var combo = eventCombo(e);
         // close/关闭浮层：即使在输入框也允许（既有各浮层 Escape 处理器仍会各自兜底）
         if (comboMap[combo] === 'close') { closeAnyOverlay(); return; }
+        // #48：保存全部（Ctrl+S）在输入框内也允许触发（设置页多为输入框聚焦态），并拦截浏览器默认保存
+        if (comboMap[combo] === 'save_settings') {
+            if (document.getElementById('settings-form')) { e.preventDefault(); runAction('save_settings'); }
+            return;
+        }
         if (inEditable(e)) return;
 
         // g 前缀序列的第二键
@@ -753,8 +763,8 @@ function initModuleCustomizer(pageKey) {
    #41 自动检测更新
    浏览器直连 GitHub Releases API（官方支持 CORS），不经 Flask 转发——
    打包后用户机器未必有代理，服务端请求易失败；前端失败则静默降级。
-   自动检测每 24h 最多一次（localStorage 记时间戳），同一新版本只 Toast 一次；
-   设置页「检查更新」按钮走 checkForUpdate(true) 强制检测并展示结果。
+   自动检测每次启动一次（sessionStorage 记会话标记，页面切换不重复请求），
+   同一新版本只 Toast 一次；设置页「检查更新」按钮走 checkForUpdate(true) 强制检测并展示结果。
    ═══════════════════════════════════════════════════════ */
 
 // 语义化版本比较：容忍 v 前缀，逐段比数字；a > b 返 1，相等 0，小于 -1
@@ -770,8 +780,8 @@ function initModuleCustomizer(pageKey) {
     return 0;
 }
 
-// 检测更新。force=true（设置页按钮）：忽略 24h 限制，结果写入 #update-check-result；
-// force=false（启动自检）：限频 + 发现新版 Toast，同一版本不重复提醒。
+// 检测更新。force=true（设置页按钮）：忽略会话限制，结果写入 #update-check-result；
+// force=false（启动自检）：每次启动仅一次 + 发现新版 Toast，同一版本不重复提醒。
 function checkForUpdate(force) {
     var current = window.__APP_VERSION;
     var repo = window.__GITHUB_REPO;
@@ -779,9 +789,9 @@ function checkForUpdate(force) {
 
     var resultEl = document.getElementById('update-check-result');
     if (!force) {
-        var last = 0;
-        try { last = parseInt(localStorage.getItem('updateCheckAt') || '0', 10); } catch (e) {}
-        if (Date.now() - last < 24 * 60 * 60 * 1000) return;
+        var checked = '';
+        try { checked = sessionStorage.getItem('updateCheckedSession') || ''; } catch (e) {}
+        if (checked) return;
     } else if (resultEl) {
         resultEl.textContent = '检查中…';
     }
@@ -792,7 +802,7 @@ function checkForUpdate(force) {
         if (!res.ok) throw new Error('HTTP ' + res.status);
         return res.json();
     }).then(function(rel) {
-        try { localStorage.setItem('updateCheckAt', String(Date.now())); } catch (e) {}
+        try { sessionStorage.setItem('updateCheckedSession', '1'); } catch (e) {}
         var latest = rel.tag_name || rel.name || '';
         var pageUrl = rel.html_url || ('https://github.com/' + repo + '/releases');
         var hasNew = latest && compareVersions(latest, current) > 0;
@@ -815,8 +825,12 @@ function checkForUpdate(force) {
             }
         }
     }).catch(function(err) {
-        // 离线/限流/无 Release 等均静默降级；仅手动检查时展示失败原因
-        if (force && resultEl) resultEl.textContent = '检查失败（网络不可用或 GitHub 限流），请稍后重试';
+        // 离线/限流/无 Release 等均静默降级；#42：手动检查失败时给出项目地址让用户自行查看
+        if (force && resultEl) {
+            var releasesUrl = 'https://github.com/' + repo + '/releases';
+            resultEl.innerHTML = '检查失败（网络不可用或 GitHub 限流），可前往 ' +
+                '<a href="' + releasesUrl + '" target="_blank" rel="noopener" style="color:var(--color-accent);text-decoration:underline;">' + releasesUrl + '</a> 自行查看';
+        }
     });
 }
 
@@ -826,7 +840,7 @@ document.addEventListener('DOMContentLoaded', function() {
     initSidebarState();
     initImageUpload();
     initModuleCustomizer(location.pathname);   // P16h 统计模块自定义显隐
-    checkForUpdate(false);                     // #41 启动自检更新（24h 限频，失败静默）
+    checkForUpdate(false);                     // #41/#46 启动自检更新（每会话一次，失败静默）
 });
 
 /* ═══════════════════════════════════════════════════════════
@@ -906,7 +920,11 @@ window.addEventListener('unhandledrejection', function(e) {
     // 过滤 View Transitions API 的正常跳过事件（非真实错误）
     var reason = e.reason;
     if (reason && reason.name === 'AbortError') { e.preventDefault(); return; }
-    logFrontendError('Unhandled Promise', String(reason || 'unknown'), '', 0);
+    // #46 reason 为空（拿不到任何错误信息）的 rejection 属无害噪音，静默忽略不进日志
+    if (reason === undefined || reason === null || String(reason).trim() === '') {
+        e.preventDefault(); return;
+    }
+    logFrontendError('Unhandled Promise', String(reason), '', 0);
 });
 
 function logFrontendError(type, message, source, line) {

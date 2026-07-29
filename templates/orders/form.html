@@ -98,7 +98,7 @@
                             <input type="number" name="deposit" id="deposit-plat" step="0.01" min="0" value="{{ order.income if order else '0' }}" oninput="calcActualReceived()" {{ 'disabled' if not is_plat }}>
                         </div>
                         <div class="form-group"><label>手续费 (%)</label>
-                            <input type="number" name="platform_fee_pct" id="platform_fee_pct" step="0.1" min="0" max="100" value="{{ '%.1f'|format(order.platform_fee_pct) if order and order.platform_fee_pct else '5' }}" oninput="calcActualReceived()" {{ 'disabled' if not is_plat }}>
+                            <input type="number" name="platform_fee_pct" id="platform_fee_pct" step="0.1" min="0" max="100" value="{{ '%.1f'|format(order.platform_fee_pct if order and order.platform_fee_pct else DEFAULT_FEES.get(order.source if order else '米画师', 5)) }}" oninput="calcActualReceived()" {{ 'disabled' if not is_plat }}>
                         </div>
                     </div>
                     <div style="margin-top:var(--space-sm);padding:10px;background:var(--color-bg);border-radius:var(--radius-sm);display:grid;grid-template-columns:repeat(3,1fr);gap:8px;font-size:0.85rem;">
@@ -173,11 +173,16 @@
 <script src="/static/datetime-toggle.js"></script>
 <script>
 var PLATFORM = {{ PLATFORM_SOURCES|list|tojson }};
+var DEFAULT_FEES = {{ DEFAULT_FEES|tojson }};
+// #43：记录上次来源，只有来源真正变化时才用设置的默认费率覆盖费率框（编辑打开不覆盖快照，手改后不被强制改回）
+var lastSource = document.getElementById('source').value||'';
 function isPlatform(){ var s=document.getElementById('source').value||''; return PLATFORM.indexOf(s)!==-1; }
 function toggleFinanceMode(){ var p=isPlatform(); document.getElementById('finance-platform').style.display=p?'':'none'; document.getElementById('finance-direct').style.display=p?'none':''; 
     // 隐藏区块必须 disabled，否则隐藏的 deposit/balance 仍会随表单提交，导致重复 name 覆盖可见输入（金额膨胀 bug）
     document.getElementById('deposit-plat').disabled=!p; document.getElementById('platform_fee_pct').disabled=!p;
     document.getElementById('deposit-direct').disabled=p; document.getElementById('balance-direct').disabled=p;
+    var s=document.getElementById('source').value||'';
+    if(s!==lastSource){ if(p && DEFAULT_FEES[s]!==undefined) document.getElementById('platform_fee_pct').value=DEFAULT_FEES[s].toFixed(1); lastSource=s; }
     calcActualReceived(); }
 function calcActualReceived(){
     if(isPlatform()){ var i=parseFloat(document.getElementById('deposit-plat').value)||0; var pct=parseFloat(document.getElementById('platform_fee_pct').value)||0; var f=Math.round(i*pct)/100; document.getElementById('preview-income').textContent=i.toFixed(2); document.getElementById('preview-fee').textContent=f.toFixed(2); document.getElementById('preview-actual').textContent=(i-f).toFixed(2); }

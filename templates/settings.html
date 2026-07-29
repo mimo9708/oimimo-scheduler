@@ -7,7 +7,7 @@
         <h1 class="page-title">设置</h1>
     </div>
     <div style="display:flex;gap:var(--space-sm);">
-        <button class="btn btn-primary" onclick="document.getElementById('settings-form').submit();">保存全部</button>
+        <button class="btn btn-primary" onclick="var f=document.getElementById('settings-form'); f.requestSubmit ? f.requestSubmit() : f.submit();">保存全部</button>
         <form method="POST" action="/settings/reset" style="display:inline;"
               onsubmit="return confirm('确定要恢复默认设置吗？')">
             <button class="btn btn-secondary">恢复默认</button>
@@ -96,10 +96,11 @@
                 </div>
             </div>
         </div>
-        <!-- 日历着色 -->
+        <!-- #45 R3：着色模式（原「日历着色模式」，统一管理全站标签着色） -->
         <div class="card" style="margin-bottom:var(--space-md);">
-            <div class="card-header">日历着色模式</div>
+            <div class="card-header">着色模式</div>
             <div class="card-body">
+                <p style="font-size:0.85rem;color:var(--color-text-secondary);margin-bottom:var(--space-md);">此处配色统一作用于日历、订单徽章、收入图表等所有标签着色。</p>
                 <div style="display:flex;gap:2px;margin-bottom:var(--space-lg);flex-wrap:wrap;">
                     {% for mode in cal_modes %}
                     <button type="button" class="mode-tab" data-mode="{{ mode.id }}"
@@ -109,17 +110,22 @@
                 </div>
                 {% for mode in cal_modes %}
                 <div class="mode-panel" id="cal-panel-{{ mode.id }}" style="display:none;">
-                    <div style="display:flex;border-radius:var(--radius-md);overflow:hidden;height:40px;margin-bottom:var(--space-lg);">
+                    {% if mode.id == 'commission' %}
+                    <p style="font-size:0.82rem;color:var(--color-text-tertiary);margin-bottom:var(--space-sm);">该配色同时用于收入页「品类分布」图表，改动后两处同步生效。</p>
+                    {% elif mode.id == 'stage' %}
+                    <p style="font-size:0.82rem;color:var(--color-text-tertiary);margin-bottom:var(--space-sm);">阶段配色同时作用于全站阶段徽章与甘特图，改动后各处同步生效。</p>
+                    {% endif %}
+                    <div style="display:flex;border-radius:var(--radius-md);overflow:hidden;height:28px;margin-bottom:var(--space-md);">
                         {% for item in cal_palettes[mode.id] %}
                         <div style="flex:1;background:{{ item.value }};min-width:30px;" title="{{ item.label }}"></div>
                         {% endfor %}
                     </div>
-                    <div style="display:grid;grid-template-columns:repeat(auto-fill, minmax(280px, 1fr));gap:var(--space-sm);">
+                    <div style="display:grid;grid-template-columns:repeat(auto-fill, minmax(180px, 1fr));gap:var(--space-sm);">
                         {% for item in cal_palettes[mode.id] %}
-                        <div class="color-row" data-key="{{ item.key }}" style="display:flex;align-items:center;gap:var(--space-sm);padding:var(--space-sm);border:1px solid var(--color-border);border-radius:var(--radius-sm);">
+                        <div class="color-row" data-key="{{ item.key }}" style="display:flex;align-items:center;gap:var(--space-sm);padding:4px 8px;border:1px solid var(--color-border);border-radius:var(--radius-sm);">
                             <div class="cp-trigger" data-hex="{{ item.value }}" style="background:{{ item.value }};"></div>
                             <div style="flex:1;min-width:0;">
-                                <div style="font-size:0.92rem;font-weight:500;">{{ item.label }}</div>
+                                <div style="font-size:0.85rem;font-weight:500;">{{ item.label }}</div>
                             </div>
                             <input type="hidden" name="{{ item.key }}" value="{{ item.value }}">
                             <button type="button" class="btn-ghost btn-sm" style="font-size:0.72rem;color:var(--color-text-tertiary);"
@@ -129,6 +135,33 @@
                     </div>
                 </div>
                 {% endfor %}
+                <!-- #45 R5：配色预设（整套 cal_* 配色命名保存/切换，交互仿「自定义 CSS 主题」） -->
+                <div style="margin-top:var(--space-lg);padding-top:var(--space-md);border-top:1px solid var(--color-border);">
+                    <label style="font-size:0.85rem;font-weight:600;">配色预设</label>
+                    <p style="font-size:0.78rem;color:var(--color-text-tertiary);margin:4px 0 0;">把当前整套着色配色命名保存，可随时切换。以已「保存全部」的值为准，改色后请先保存再存预设；点预设上的「更新」可把当前配色存回该预设。</p>
+                    {% if palette_err %}
+                    <div style="padding:8px 12px;margin-top:6px;border-radius:var(--radius-sm);background:var(--color-danger-bg);color:var(--color-danger);font-size:0.85rem;">⚠ {{ palette_err }}</div>
+                    {% endif %}
+                    {% if palette_presets %}
+                    <div style="display:grid;grid-template-columns:repeat(auto-fill, minmax(160px, 1fr));gap:var(--space-sm);margin-top:var(--space-sm);">
+                        {% for p in palette_presets %}
+                        <div style="padding:10px 12px;border:2px solid {% if p.id == palette_active_id %}var(--color-primary){% else %}var(--color-border){% endif %};border-radius:var(--radius-md);">
+                            <div style="font-weight:600;font-size:0.88rem;word-break:break-all;">{{ p.name }}{% if p.id == palette_active_id %} <span style="font-size:0.7rem;font-weight:500;color:var(--color-primary);">使用中</span>{% endif %}</div>
+                            <div style="display:flex;gap:6px;margin-top:8px;">
+                                <button type="button" class="btn btn-secondary btn-sm" style="flex:1;" onclick="applyPalettePreset('{{ p.id }}')">选用</button>
+                                <button type="button" class="btn btn-ghost btn-sm" onclick="updatePalettePreset('{{ p.id }}')">更新</button>
+                                <button type="button" class="btn btn-ghost btn-sm" style="color:var(--color-danger);" onclick="deletePalettePreset('{{ p.id }}')">删除</button>
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                    {% endif %}
+                    <div style="display:flex;gap:var(--space-sm);margin-top:var(--space-sm);">
+                        <input type="text" id="palette-preset-name" placeholder="预设名称（如：暖色方案）"
+                               style="flex:1;padding:8px 12px;border:1px solid var(--color-border);border-radius:var(--radius-sm);font-size:0.88rem;">
+                        <button type="button" class="btn btn-primary btn-sm" onclick="savePalettePreset()" style="white-space:nowrap;">保存当前配色为预设</button>
+                    </div>
+                </div>
             </div>
         </div>
 
@@ -137,9 +170,9 @@
         <div class="card" style="margin-bottom:var(--space-md);">
             <div class="card-header">{{ group_name }}</div>
             <div class="card-body">
-                <div style="display:grid;grid-template-columns:repeat(auto-fill, minmax(240px, 1fr));gap:var(--space-sm);">
+                <div style="display:grid;grid-template-columns:repeat(auto-fill, minmax(180px, 1fr));gap:var(--space-sm);">
                     {% for item in items %}
-                    <div class="color-simple-row" style="display:flex;align-items:center;gap:var(--space-sm);padding:var(--space-sm);border:1px solid var(--color-border);border-radius:var(--radius-sm);">
+                    <div class="color-simple-row" style="display:flex;align-items:center;gap:var(--space-sm);padding:4px 8px;border:1px solid var(--color-border);border-radius:var(--radius-sm);">
                         <div class="cp-trigger small" data-hex="{{ item.value }}" style="background:{{ item.value }};"></div>
                         <div style="flex:1;min-width:0;font-size:0.88rem;">{{ item.label }}</div>
                         <input type="hidden" name="{{ item.key }}" value="{{ item.value }}">
@@ -327,7 +360,7 @@
             </div>
             <div style="margin-top:var(--space-sm);font-size:0.75rem;color:var(--color-text-tertiary);">
                 项目主页：<a href="https://github.com/{{ GITHUB_REPO }}" target="_blank" rel="noopener" style="color:var(--color-info);">github.com/{{ GITHUB_REPO }}</a>
-                · 启动时每 24 小时自动检测一次，发现新版以提醒形式通知，不会自动下载
+                · 每次启动时自动检测一次，发现新版以提醒形式通知，不会自动下载
             </div>
         </div>
     </div>
@@ -422,6 +455,10 @@ var PRESET_CSS_MAP = {
     'stage_cancelled': '--stage-cancelled',
 };
 
+// #45 R2：「阶段色」input 已从全局主题色移除，预设里的 stage_<slug> 改写入「着色模式·按阶段」面板的 cal_stage_<中文> input
+var SLUG_TO_LABEL = {'pending': '待开始', 'sketch': '色稿', 'lineart': '线稿',
+                     'detail': '细化', 'finish': '收尾', 'completed': '完成', 'cancelled': '退单'};
+
 // 应用预设主题（写入下方隐藏 input + 色块预览 + 实时预览 CSS 变量）
 function applyPreset(presetId) {
     var preset = PRESET_DATA[presetId];
@@ -433,8 +470,13 @@ function applyPreset(presetId) {
     var root = document.documentElement;
 
     Object.keys(preset).forEach(function(key) {
-        // 1. 写入隐藏 input + 色块 trigger
-        var input = form.querySelector('input[name="' + key + '"]');
+        // 1. 写入隐藏 input + 色块 trigger（#45 R2：stage_* 键映射到 cal_stage_* input）
+        var inputName = key;
+        if (key.indexOf('stage_') === 0) {
+            var _lbl = SLUG_TO_LABEL[key.slice(6)];
+            if (_lbl) inputName = 'cal_stage_' + _lbl;
+        }
+        var input = form.querySelector('input[name="' + inputName + '"]');
         if (input) {
             input.value = preset[key];
             var row = input.closest('.color-simple-row') || input.closest('.color-row');
@@ -495,11 +537,13 @@ function applyPreset(presetId) {
     triggers.forEach(function(trigger) {
         var row = trigger.closest('.color-row') || trigger.closest('.color-simple-row');
         var textInput = row ? row.querySelector('input[type="text"]') : null;
+        var hiddenInput = row ? row.querySelector('input[type="hidden"]') : null;  // #44：表单实际提交的字段
         var hexVal = row ? row.querySelector('.hex-val') : null;
         ColorPicker.create(trigger, {
             hex: trigger.dataset.hex || '#b0b0aa',
             onChange: function(hex) {
                 if (textInput) textInput.value = hex;
+                if (hiddenInput) hiddenInput.value = hex;  // #44：改色写回 hidden，否则「保存全部」提交旧值
                 if (hexVal) hexVal.textContent = hex;
                 updateStripColors(activeMode);
             }
@@ -514,8 +558,10 @@ function syncPickerText(input) {
     if (!/^#[0-9a-fA-F]{6}$/.test(v)) return;
     var row = input.closest('.color-row') || input.closest('.color-simple-row');
     var trigger = row ? row.querySelector('.cp-trigger') : null;
+    var hiddenInput = row ? row.querySelector('input[type="hidden"]') : null;
     var hexVal = row ? row.querySelector('.hex-val') : null;
     if (trigger) { trigger.style.background = v; trigger.dataset.hex = v; }
+    if (hiddenInput) hiddenInput.value = v;  // #44：同步表单字段
     if (hexVal) hexVal.textContent = v;
     updateStripColors(activeMode);
 }
@@ -525,9 +571,11 @@ function resetPickerColor(btn, defaultHex) {
     var row = btn.closest('.color-row') || btn.closest('.color-simple-row');
     var trigger = row ? row.querySelector('.cp-trigger') : null;
     var textInput = row ? row.querySelector('input[type="text"]') : null;
+    var hiddenInput = row ? row.querySelector('input[type="hidden"]') : null;
     var hexVal = row ? row.querySelector('.hex-val') : null;
     if (trigger) { trigger.style.background = defaultHex; trigger.dataset.hex = defaultHex; }
     if (textInput) textInput.value = defaultHex;
+    if (hiddenInput) hiddenInput.value = defaultHex;  // #44：重置也要写回表单字段
     if (hexVal) hexVal.textContent = defaultHex;
     updateStripColors(activeMode);
 }
@@ -560,6 +608,25 @@ function applyCustomTheme(id) {
 function deleteCustomTheme(id) {
     if (!confirm('\u786e\u5b9a\u5220\u9664\u8be5\u81ea\u5b9a\u4e49\u4e3b\u9898\uff1f')) return;
     _postThemeForm('/settings/theme/delete', {theme_id: id});
+}
+
+// #45 R5：配色预设（保存 / 选用 / 删除，复用 _postThemeForm 独立提交，避免嵌套表单）
+function savePalettePreset() {
+    var name = document.getElementById('palette-preset-name').value.trim();
+    if (!name) { showToast('\u8bf7\u586b\u5199\u9884\u8bbe\u540d\u79f0', 'error'); return; }
+    _postThemeForm('/settings/palette/save', {palette_name: name});
+}
+function applyPalettePreset(id) {
+    _postThemeForm('/settings/palette/apply', {palette_id: id});
+}
+// #47：把当前已保存的配色覆盖写回该预设（原地更新，名称不变）
+function updatePalettePreset(id) {
+    if (!confirm('\u786e\u5b9a\u7528\u5f53\u524d\u914d\u8272\u8986\u76d6\u66f4\u65b0\u8be5\u9884\u8bbe\uff1f\u4ee5\u5df2\u300c\u4fdd\u5b58\u5168\u90e8\u300d\u7684\u503c\u4e3a\u51c6\u3002')) return;
+    _postThemeForm('/settings/palette/update', {palette_id: id});
+}
+function deletePalettePreset(id) {
+    if (!confirm('\u786e\u5b9a\u5220\u9664\u8be5\u914d\u8272\u9884\u8bbe\uff1f\u5f53\u524d\u751f\u6548\u989c\u8272\u4e0d\u53d7\u5f71\u54cd\u3002')) return;
+    _postThemeForm('/settings/palette/delete', {palette_id: id});
 }
 
 // Tab 切换

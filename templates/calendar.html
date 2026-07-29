@@ -206,12 +206,30 @@ function changeColorMode(mode) {
         window.calendar.setOption('events', '/api/orders/calendar-events?color=' + mode + poolFilterParams());
         window.calendar.refetchEvents();
     }
+    // #45 R1：持久化用户偏好（fire-and-forget，失败不阻断切换）
+    var fd = new FormData();
+    fd.append('mode', mode);
+    fetch('/settings/color-mode', {method: 'POST', body: fd})
+        .catch(function(err) { console.warn('着色模式偏好保存失败', err); });
 }
 
 // 带颜色模式的日历初始化
 function initCalendarWithMode(colorMode) {
     const calendarEl = document.getElementById('calendar');
     if (!calendarEl) return;
+
+    // #42：FullCalendar 全天事件的 end 是排他日期（后端发事件时已 +1 天），
+    // 拖拽回传前必须减 1 天转回包含式，否则每拖一次 scheduled_end 多存一天
+    function fcInclusiveEnd(event) {
+        var endStr = event.endStr;
+        if (!endStr) return event.startStr;
+        if (!event.allDay) return endStr.slice(0, 10);
+        var p = endStr.slice(0, 10).split('-');
+        var d = new Date(Date.UTC(+p[0], +p[1] - 1, +p[2]));
+        d.setUTCDate(d.getUTCDate() - 1);
+        var inclusive = d.toISOString().slice(0, 10);
+        return inclusive < event.startStr ? event.startStr : inclusive;
+    }
 
     const calendar = new FullCalendar.Calendar(calendarEl, {
         initialView: 'dayGridMonth',
@@ -272,7 +290,7 @@ function initCalendarWithMode(colorMode) {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     start: info.event.startStr,
-                    end: info.event.endStr || info.event.startStr
+                    end: fcInclusiveEnd(info.event)
                 })
             }).then(function() { showToast('排期已更新', 'success'); });
         },
@@ -285,7 +303,7 @@ function initCalendarWithMode(colorMode) {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     start: info.event.startStr,
-                    end: info.event.endStr
+                    end: fcInclusiveEnd(info.event)
                 })
             }).then(function() { showToast('排期已更新', 'success'); });
         },

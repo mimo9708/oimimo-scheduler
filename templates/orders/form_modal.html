@@ -108,7 +108,7 @@
         </div>
         <div class="form-group" id="modal-fee-field">
             <label for="platform_fee_pct">手续费 (%)</label>
-            <input type="number" name="platform_fee_pct" step="0.1" min="0" max="100" value="{{ prefill.platform_fee_pct or 0 }}" oninput="calcModalActual()">
+            <input type="number" name="platform_fee_pct" step="0.1" min="0" max="100" value="{{ prefill.platform_fee_pct if prefill.platform_fee_pct else '%.1f'|format(DEFAULT_FEES.get(prefill.source or '米画师', 5)) }}" oninput="calcModalActual()">
         </div>
         <div style="margin-top:var(--space-sm);padding:10px;background:var(--color-bg);border-radius:var(--radius-sm);font-size:0.85rem;" id="modal-preview-platform">
             收入: <strong id="modal-income">¥0</strong>
@@ -171,6 +171,9 @@ setTimeout(function() { DateTimeToggle.initAll('#center-modal-body .date-field i
 })();
 
 var PLATFORM = {{ PLATFORM_SOURCES|map('string')|list|tojson }};
+var MODAL_FEES = {{ DEFAULT_FEES|tojson }};
+// #43：记录上次来源，只有来源真正变化时才用设置的默认费率覆盖费率框（手改后不被强制改回）
+var modalLastSource = document.querySelector('[name="source"]').value || '';
 function isPlat() {
     var s = document.querySelector('[name="source"]').value || '米画师';
     return PLATFORM.indexOf(s) !== -1;
@@ -180,6 +183,11 @@ function toggleModalFee() {
     document.getElementById('modal-fee-field').style.display = p ? '' : 'none';
     document.getElementById('modal-preview-platform').style.display = p ? '' : 'none';
     document.getElementById('modal-preview-direct').style.display = p ? 'none' : '';
+    var s = document.querySelector('[name="source"]').value || '';
+    if (s !== modalLastSource) {
+        if (p && MODAL_FEES[s] !== undefined) document.querySelector('[name="platform_fee_pct"]').value = MODAL_FEES[s].toFixed(1);
+        modalLastSource = s;
+    }
     calcModalActual();
 }
 function calcModalActual() {
