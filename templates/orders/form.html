@@ -33,7 +33,7 @@
                 <div class="form-group">
                     <label for="platform_url">原订单链接</label>
                     <input type="url" name="platform_url" id="platform_url" placeholder="https://..."
-                           value="{{ order.platform_url if order else '' }}">
+                           value="{{ order.platform_url if order and order.platform_url else '' }}">
                 </div>
 
                 <div class="form-row">
@@ -70,9 +70,54 @@
                 </div>
 
                 <div class="section-label" style="margin-top:var(--space-md);">进度</div>
+                {# Spec12：编辑模式下显示时间轴（新建订单尚无快照，不显示） #}
+                {% if not is_new %}
+                {% from "partials/_stage_timeline.html" import stage_timeline %}
+                <div class="stage-timeline-compact" style="margin-bottom:var(--space-sm);">
+                    {{ stage_timeline(order) }}
+                </div>
+                {# Spec12：编辑模式 — 流程预设切换 + 隐藏 stage_flow #}
+                <div class="form-group" style="margin-bottom:var(--space-sm);">
+                    <label for="page-stage-flow-preset">切换阶段流程</label>
+                    <select id="page-stage-flow-preset" onchange="onPageFlowPresetChange()">
+                        <option value="" selected>— 保持当前流程 —</option>
+                        {% for f in STAGE_FLOWS %}
+                        <option value="{{ loop.index0 }}">{{ f.name|e }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <input type="hidden" name="stage_flow" id="page-stage-flow-hidden"
+                       value='{{ order._stage_flow_parsed | tojson }}'>
+                {% else %}
+                {# Spec12：新建模式 — 流程预设下拉 #}
+                <div class="form-group" style="margin-bottom:var(--space-sm);">
+                    <label for="page-stage-flow-preset">阶段流程</label>
+                    <select id="page-stage-flow-preset" onchange="onPageFlowPresetChange()">
+                        {% for f in STAGE_FLOWS %}
+                        <option value="{{ loop.index0 }}" {% if loop.first %}selected{% endif %}>{{ f.name|e }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <input type="hidden" name="stage_flow" id="page-stage-flow-hidden" value="">
+                {% endif %}
                 <div class="form-row-3">
                     <div class="form-group"><label for="current_stage">阶段</label>
-                        <select name="current_stage" id="current_stage">{% for s in STAGE_CHOICES %}<option value="{{ s }}" {% if order and order.current_stage == s %}selected{% elif not order and s == '待开始' %}selected{% endif %}>{{ s }}</option>{% endfor %}</select>
+                        <select name="current_stage" id="current_stage">
+                        {% if not is_new %}
+                            {% for s in order._stage_flow_parsed %}
+                            <option value="{{ s.name }}" {% if order.current_stage == s.name %}selected{% endif %}>{{ s.name }}</option>
+                            {% endfor %}
+                            {% if order.current_stage == '退单' %}
+                            <option value="退单" selected>退单</option>
+                            {% else %}
+                            <option value="退单">退单</option>
+                            {% endif %}
+                        {% else %}
+                            {% for s in STAGE_CHOICES %}
+                            <option value="{{ s }}" {% if s == '待开始' %}selected{% endif %}>{{ s }}</option>
+                            {% endfor %}
+                        {% endif %}
+                        </select>
                     </div>
                     <div class="form-group"><label>DDL</label>
                         <div style="padding:8px 10px;background:var(--color-bg);border-radius:var(--radius-sm);font-size:0.82rem;color:var(--color-text-secondary);">自动 &middot; {{ order.ddl_status if order else '正常' }}</div>
@@ -130,10 +175,12 @@
                     <div class="form-group date-field"><label for="scheduled_start">排单开始</label>
                         <input type="{{ 'datetime-local' if order and order.scheduled_start and 'T' in order.scheduled_start else 'date' }}" name="scheduled_start" id="scheduled_start" value="{{ order.scheduled_start if order else '' }}">
                     </div>
-                    <div class="form-group date-field"><label for="scheduled_end">排单截止</label>
+                    <div class="form-group date-field"><label for="scheduled_end">排单截止{% set input_id = 'scheduled_end' %}{% include "partials/_days_remaining_badge.html" with context %}</label>
                         <input type="{{ 'datetime-local' if order and order.scheduled_end and 'T' in order.scheduled_end else 'date' }}" name="scheduled_end" id="scheduled_end" value="{{ order.scheduled_end if order else '' }}">
                     </div>
                 </div>
+
+                {% include "partials/_hourly_fields.html" %}
 
                 {% if order and order.is_repeat %}
                 <div style="margin-top:var(--space-md);padding:8px 12px;background:var(--color-bg);border-radius:var(--radius-sm);font-size:0.82rem;color:var(--color-text-secondary);">复购 &middot; 第 {{ order.repeat_count }} 次</div>
@@ -196,5 +243,66 @@ document.getElementById('deposit-plat').addEventListener('input',calcActualRecei
 document.addEventListener('DOMContentLoaded',calcActualReceived);
 // 初始化双模式时间选择器
 document.addEventListener('DOMContentLoaded', function() { DateTimeToggle.initAll('.date-field input[type="date"], .date-field input[type="datetime-local"]'); });
+
+{% if is_new %}
+// Spec12：流程预设下拉 → 同步 stage_flow + 更新阶段 select
+{% endif %}
+var _PAGE_FLOWS = {{ STAGE_FLOWS | tojson }};
+function onPageFlowPresetChange() {
+    var sel = document.getElementById('page-stage-flow-preset');
+    var val = sel.value;
+    var hidden = document.getElementById('page-stage-flow-hidden');
+    var stageSelect = document.getElementById('current_stage');
+    if (val === '') {
+        // "保持当前流程" → 不修改 stage_flow（编辑模式保持原快照）
+        {% if not is_new %}
+        var _origFlow = '{{ order._stage_flow_parsed | tojson | replace("'", "\\'") }}';
+        hidden.value = _origFlow;
+        if (stageSelect) {
+            var orig = JSON.parse(_origFlow);
+            var curVal = stageSelect.value;
+            stageSelect.innerHTML = '';
+            orig.forEach(function(s) {
+                var opt = document.createElement('option');
+                opt.value = s.name; opt.textContent = s.name;
+                if (s.name === curVal) opt.selected = true;
+                stageSelect.appendChild(opt);
+            });
+            var retOpt = document.createElement('option');
+            retOpt.value = '退单'; retOpt.textContent = '退单';
+            if (curVal === '退单') retOpt.selected = true;
+            stageSelect.appendChild(retOpt);
+        }
+        {% endif %}
+        return;
+    }
+    var idx = parseInt(val, 10);
+    var flow = _PAGE_FLOWS[idx];
+    if (flow && flow.stages) {
+        hidden.value = JSON.stringify(flow.stages);
+        if (stageSelect) {
+            var curVal = stageSelect.value;
+            stageSelect.innerHTML = '';
+            flow.stages.forEach(function(s) {
+                var opt = document.createElement('option');
+                opt.value = s.name; opt.textContent = s.name;
+                stageSelect.appendChild(opt);
+            });
+            // 退单选项始终保留
+            var retOpt = document.createElement('option');
+            retOpt.value = '退单'; retOpt.textContent = '退单';
+            stageSelect.appendChild(retOpt);
+            // 保留当前阶段选项（如果在新的流程中存在）
+            var found = flow.stages.some(function(s) { return s.name === curVal; });
+            if (found) stageSelect.value = curVal;
+            else if (curVal === '退单') stageSelect.value = '退单';
+        }
+    } else {
+        hidden.value = '';
+    }
+}
+{% if is_new %}
+onPageFlowPresetChange();
+{% endif %}
 </script>
 {% endblock %}

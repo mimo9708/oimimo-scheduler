@@ -7,6 +7,7 @@ import sqlite3
 import os
 import sys
 import json
+import shutil
 import logging
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta
@@ -23,6 +24,43 @@ def data_dir() -> str:
 
 
 DB_PATH = os.path.join(data_dir(), 'orders.db')
+
+# P22a 数据备份：默认与 orders.db 同目录下的 backups/ 子目录（可通过设置自定义）
+DEFAULT_BACKUP_DIR = os.path.join(data_dir(), 'backups')
+MAX_BACKUPS = 10
+
+
+def get_backup_dir() -> str:
+    """获取备份目录：用户自定义 > 默认值（exe 同级 backups/）。
+    每次调用实时查 settings 表，确保用户切换路径后立即生效。
+    """
+    try:
+        conn = get_db()
+        row = conn.execute(
+            "SELECT value FROM settings WHERE key = 'backup_dir'"
+        ).fetchone()
+        conn.close()
+        if row and row['value'] and os.path.isdir(row['value']):
+            return row['value']
+    except Exception as e:
+        logger.error('读取备份目录设置失败: %s', e)
+    return DEFAULT_BACKUP_DIR
+
+
+def set_backup_dir(path: str) -> tuple:
+    """设置备份目录：校验路径存在且可写。
+    返回 (True, 消息) 或 (False, 错误信息)。
+    """
+    path = path.strip()
+    if not path:
+        update_settings({'backup_dir': ''})
+        return (True, f'已恢复默认备份目录：{DEFAULT_BACKUP_DIR}')
+    if not os.path.isdir(path):
+        return (False, '目录不存在')
+    if not os.access(path, os.W_OK):
+        return (False, '目录无写入权限')
+    update_settings({'backup_dir': path})
+    return (True, f'备份目录已设置为：{path}')
 
 
 def get_db() -> sqlite3.Connection:
@@ -104,9 +142,13 @@ def init_db():
             has_image       INTEGER NOT NULL DEFAULT 0,       -- 是否有作品图片
             completed_at    TEXT,                             -- 实际完成归档时间（P15a 统计口径）
             is_overdue      INTEGER NOT NULL DEFAULT 0,       -- 是否逾期完成（P15b）
+            estimated_hours REAL,                             -- 预估工时（小时，P20b 时薪）
+            work_hours      REAL,                             -- 实际工时（小时，P20b 时薪）
+            exclude_hourly  INTEGER NOT NULL DEFAULT 0,       -- 不参与时薪统计（P20b 单订单排除）
             scheduled_start TEXT,
             scheduled_end   TEXT,
             sort_order      INTEGER NOT NULL DEFAULT 0,
+            stage_flow      TEXT,                             -- 本单阶段流程快照 JSON（Spec12 阶段进度可视化）
             created_at      TEXT    NOT NULL DEFAULT (datetime('now','localtime')),
             updated_at      TEXT    NOT NULL DEFAULT (datetime('now','localtime')),
             FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL
@@ -259,6 +301,23 @@ def init_db():
     except Exception:
         pass
 
+    # P20b 时薪迁移：预估/实际工时 + 单订单排除标记（新建库已在 CREATE TABLE 中定义，此处幂等）
+    for col in ('estimated_hours REAL', 'work_hours REAL'):
+        try:
+            conn.execute(f"ALTER TABLE orders ADD COLUMN {col}")
+        except Exception:
+            pass  # 列已存在
+    try:
+        conn.execute("ALTER TABLE orders ADD COLUMN exclude_hourly INTEGER NOT NULL DEFAULT 0")
+    except Exception:
+        pass  # 列已存在
+
+    # Spec12 阶段流程快照：orders.stage_flow TEXT（本单阶段流程 JSON，详见 get_stage_flows）
+    try:
+        conn.execute("ALTER TABLE orders ADD COLUMN stage_flow TEXT")
+    except Exception:
+        pass  # 列已存在
+
     conn.commit()
     conn.close()
     # 迁移：累计消费口径变更（仅统计已归档+已完成+已结算订单），一次性重算全部客户
@@ -285,6 +344,8 @@ def init_db():
         pass
     # P19-F10：迁移可能改写 orders 数据（auto-discover 来源），启动期统一失效 choices 缓存
     _invalidate_choices_cache()
+    # Spec12：stage_flows 缓存也随启动失效（_ensure_default_settings 可能已回填默认流程）
+    _invalidate_stage_flows_cache()
     # P20-F14：图片引用一致性自愈（用户绕过应用手动删 uploads 文件后，
     # order_images 记录与 orders 封面三列残留 → 画廊失效链接；启动时自动对齐）
     repair_image_consistency()
@@ -330,6 +391,190 @@ ARCHIVE_PAID_STATUSES = {'已结算', '免收'}
 # 单用户本地场景模块级 dict 即够：无跨进程竞争；Flask 单进程多线程下最坏情况是
 # 并发各自重建一次缓存，结果一致，故无锁取舍（注释备案）。
 _CHOICES_CACHE: dict = {}
+
+
+# ── P22a 数据备份与恢复 ──────────────────────────────────────────
+
+
+def _count_orders(conn) -> int:
+    """内部辅助：统计 orders 行数，异常返回 0。"""
+    try:
+        return conn.execute('SELECT COUNT(*) FROM orders').fetchone()[0]
+    except Exception:
+        return 0
+
+
+def _do_backup():
+    """备份核心：copy2 当前 DB_PATH 到 get_backup_dir()，超额删最旧。
+    返回 (True, 备份路径) 或 (False, 错误信息)。
+    """
+    try:
+        backup_dir = get_backup_dir()
+        os.makedirs(backup_dir, exist_ok=True)
+        ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+        name = f'orders_backup_{ts}.db'
+        dst = os.path.join(backup_dir, name)
+        shutil.copy2(DB_PATH, dst)
+        # 保留策略：列出所有备份文件，按文件名排序，超额删最旧
+        files = sorted(
+            f for f in os.listdir(backup_dir)
+            if f.startswith('orders_backup_') and f.endswith('.db')
+        )
+        while len(files) > MAX_BACKUPS:
+            oldest = files.pop(0)
+            try:
+                os.remove(os.path.join(backup_dir, oldest))
+            except OSError:
+                logger.error('删除最旧备份失败: %s', oldest)
+        return (True, dst)
+    except Exception as e:
+        logger.error('备份失败: %s', e)
+        return (False, str(e))
+
+
+def auto_backup():
+    """启动时自动备份：仅当 orders 行数 > 0（空库不备份，避免挤掉有用备份）。
+    失败仅记日志，不阻断启动。
+    """
+    try:
+        if not os.path.isfile(DB_PATH):
+            return
+        conn = get_db()
+        try:
+            cnt = _count_orders(conn)
+        finally:
+            conn.close()
+        if cnt <= 0:
+            return
+        _do_backup()
+    except Exception as e:
+        logger.error('自动备份失败: %s', e)
+
+
+def check_data_recovery_needed() -> bool:
+    """空库检测：orders==0 且备份目录存在且含备份文件 → True。
+    新装用户无备份目录不误报；异常返回 False 并记日志。
+    """
+    try:
+        backup_dir = get_backup_dir()
+        if not os.path.isdir(backup_dir):
+            return False
+        files = [
+            f for f in os.listdir(backup_dir)
+            if f.startswith('orders_backup_') and f.endswith('.db')
+        ]
+        if not files:
+            return False
+        conn = get_db()
+        try:
+            cnt = _count_orders(conn)
+        finally:
+            conn.close()
+        return cnt == 0
+    except Exception as e:
+        logger.error('空库检测异常: %s', e)
+        return False
+
+
+def get_backup_list() -> list:
+    """遍历 get_backup_dir() 内 orders_backup_*.db，按文件名倒序。
+    每条: {'name','size','mtime','orders','customers'}；
+    单条损坏/不可读跳过；无目录返回 []。
+    """
+    backup_dir = get_backup_dir()
+    if not os.path.isdir(backup_dir):
+        return []
+    result = []
+    files = sorted(
+        (f for f in os.listdir(backup_dir)
+         if f.startswith('orders_backup_') and f.endswith('.db')),
+        reverse=True
+    )
+    for fname in files:
+        fpath = os.path.join(backup_dir, fname)
+        try:
+            stat = os.stat(fpath)
+            size_kb = round(stat.st_size / 1024, 1)
+            mtime = datetime.fromtimestamp(stat.st_mtime).strftime('%Y-%m-%d %H:%M')
+            # 临时只读连接统计行数
+            ro_conn = sqlite3.connect(f'file:{fpath}?mode=ro', uri=True)
+            ro_conn.row_factory = sqlite3.Row
+            try:
+                orders = ro_conn.execute('SELECT COUNT(*) FROM orders').fetchone()[0]
+                customers = ro_conn.execute('SELECT COUNT(*) FROM customers').fetchone()[0]
+            except Exception:
+                orders = customers = -1
+            finally:
+                ro_conn.close()
+            result.append({
+                'name': fname,
+                'size': size_kb,
+                'mtime': mtime,
+                'orders': orders,
+                'customers': customers,
+            })
+        except Exception as e:
+            logger.error('备份文件 %s 不可读: %s', fname, e)
+            continue
+    return result
+
+
+def create_manual_backup():
+    """用户主动触发备份（无条件执行）。"""
+    return _do_backup()
+
+
+def delete_backup(filename):
+    """删除单条备份：basename 校验防路径穿越。
+    返回 (True, 消息) 或 (False, 错误信息)。
+    """
+    try:
+        if os.path.basename(filename) != filename:
+            return (False, '非法文件名')
+        if not filename.startswith('orders_backup_') or not filename.endswith('.db'):
+            return (False, '仅允许删除备份文件')
+        backup_dir = get_backup_dir()
+        fpath = os.path.join(backup_dir, filename)
+        if not os.path.isfile(fpath):
+            return (False, '文件不存在')
+        os.remove(fpath)
+        return (True, f'已删除 {filename}')
+    except Exception as e:
+        logger.error('删除备份失败: %s', e)
+        return (False, str(e))
+
+
+def restore_backup(filename):
+    """从备份恢复：basename 校验防穿越 + 保护性备份 + copy2 + init_db 重跑迁移。
+    返回 (True, 消息) 或 (False, 错误信息)。
+    """
+    try:
+        # 校验：防路径穿越
+        if os.path.basename(filename) != filename:
+            return (False, '非法文件名')
+        if not filename.startswith('orders_backup_') or not filename.endswith('.db'):
+            return (False, '非法文件名')
+        backup_dir = get_backup_dir()
+        src = os.path.join(backup_dir, filename)
+        if not os.path.isfile(src):
+            return (False, '备份文件不存在')
+        # 恢复前对当前库做一次保护性备份（哪怕空库也留后悔药）
+        if os.path.isfile(DB_PATH):
+            try:
+                _do_backup()
+            except Exception as e:
+                logger.error('恢复前保护性备份失败: %s', e)
+        # 覆盖
+        shutil.copy2(src, DB_PATH)
+        # 重跑 init_db 幂等迁移（为旧备份补列）
+        init_db()
+        # 失效缓存
+        _invalidate_choices_cache()
+        _invalidate_stage_flows_cache()
+        return (True, f'已从备份 {filename} 恢复')
+    except Exception as e:
+        logger.error('恢复备份失败: %s', e)
+        return (False, str(e))
 
 
 def _invalidate_choices_cache():
@@ -462,8 +707,20 @@ def get_terminal_stages() -> set:
     return {name for name, m in STAGE_META.items() if m.get('terminal')}
 
 
-def get_stage_progress(stage: str) -> int:
-    """阶段进度百分比（甘特/看板显示用）；未知阶段 0"""
+def get_stage_progress(stage: str, order=None) -> int:
+    """阶段进度百分比（Spec12：快照优先链）。
+    查找顺序：本单快照 stage_flow → STAGE_META → 退单=100 / 未知=0。
+    order 可为 dict/Row/dataclass；传 None 时退化为仅查 STAGE_META。
+    """
+    # 1. 快照命中
+    if order is not None:
+        snap = get_order_stage_flow(order)
+        for s in snap:
+            if s['name'] == stage:
+                p = _to_int(s.get('progress'))
+                if p is not None:
+                    return p
+    # 2. STAGE_META 兜底（含退单=100、未知=0）
     return int(STAGE_META.get(stage, {}).get('progress', 0))
 
 
@@ -473,6 +730,184 @@ def get_ddl_status(kind: str) -> str:
         if m.get('kind') == kind:
             return label
     return '正常'
+
+
+# ═══════════════════════════════════════════════════════════
+# Spec12 阶段流程预设（stage_flows）
+# 锁定三锚点：待开始(0)/完成(100) 为每条流程的首尾；退单 独立终态，不进流程
+# 订单 orders.stage_flow 存本单快照 JSON，改设置预设不影响历史订单
+# ═══════════════════════════════════════════════════════════
+
+_STAGE_FLOWS_CACHE = None  # 进程内缓存（None 表示未加载）
+
+# 锁定锚点（不可改名/改百分比，前端/后端强校验）
+ANCHOR_FIRST_NAME = '待开始'
+ANCHOR_FIRST_PROGRESS = 0
+ANCHOR_LAST_NAME = '完成'
+ANCHOR_LAST_PROGRESS = 100
+
+
+def _invalidate_stage_flows_cache():
+    """stage_flows 缓存统一失效入口（挂载点：save_stage_flows / init_db 迁移后）"""
+    global _STAGE_FLOWS_CACHE
+    _STAGE_FLOWS_CACHE = None
+
+
+def _default_stage_flows() -> list:
+    """默认流程（与 _ensure_default_settings 写入的兜底值保持一致）"""
+    return [
+        {'name': '默认流程', 'stages': [
+            {'name': '待开始', 'progress': ANCHOR_FIRST_PROGRESS},
+            {'name': '色稿',   'progress': 20},
+            {'name': '线稿',   'progress': 40},
+            {'name': '细化',   'progress': 60},
+            {'name': '收尾',   'progress': 80},
+            {'name': '完成',   'progress': ANCHOR_LAST_PROGRESS},
+        ]},
+    ]
+
+
+def get_stage_flows() -> list:
+    """读取全部流程预设；返回 list[{'name':str,'stages':[{'name':str,'progress':int}]}]。
+    优先进程内缓存；解析失败/空则回退 _default_stage_flows。
+    """
+    global _STAGE_FLOWS_CACHE
+    if _STAGE_FLOWS_CACHE is not None:
+        return [dict(f, stages=[dict(s) for s in f['stages']]) for f in _STAGE_FLOWS_CACHE]
+    try:
+        settings = get_all_settings()
+        raw = settings.get('stage_flows', '')
+        flows = json.loads(raw) if raw else []
+    except Exception:
+        flows = []
+    if not flows or not isinstance(flows, list):
+        flows = _default_stage_flows()
+    # 校验过的才缓存（脏数据也兜底）
+    _STAGE_FLOWS_CACHE = flows
+    return [dict(f, stages=[dict(s) for s in f['stages']]) for f in flows]
+
+
+def save_stage_flows(flows: list) -> None:
+    """保存流程预设（先逐条 validate，任一失败抛 ValueError）。
+    成功后写 settings 并统一失效缓存（_invalidate_choices_cache 也会连带触发，
+    保证 stage 选择列表 auto-discover 与新流程同步）。
+    """
+    for f in flows:
+        ok, msg = validate_stage_flow(f.get('stages', []))
+        if not ok:
+            raise ValueError(f"流程「{f.get('name','')}」校验失败：{msg}")
+    update_settings({'stage_flows': json.dumps(flows, ensure_ascii=False)})
+    _invalidate_stage_flows_cache()
+
+
+def validate_stage_flow(stages) -> tuple:
+    """校验单条流程的阶段列表。返回 (ok: bool, msg: str)。
+    规则：
+    - stages 必须是 list，且至少 2 项（首尾锚点）
+    - 首项 = {待开始, 0}；末项 = {完成, 100}
+    - 中间项：0 < progress < 100，严格递增
+    - 名称：非空、不与 待开始/完成/退单 重名（除锚点本身）、流程内不重复
+    """
+    if not isinstance(stages, list) or len(stages) < 2:
+        return (False, "至少需要 2 个阶段（首尾锚点）")
+    first, last = stages[0], stages[-1]
+    if not isinstance(first, dict) or not isinstance(last, dict):
+        return (False, "阶段结构非法（需要 {name, progress}）")
+    # 锚点校验
+    if first.get('name') != ANCHOR_FIRST_NAME:
+        return (False, f"首阶段必须为「{ANCHOR_FIRST_NAME}」")
+    if _to_int(first.get('progress')) != ANCHOR_FIRST_PROGRESS:
+        return (False, f"首阶段进度必须为 {ANCHOR_FIRST_PROGRESS}%")
+    if last.get('name') != ANCHOR_LAST_NAME:
+        return (False, f"末阶段必须为「{ANCHOR_LAST_NAME}」")
+    if _to_int(last.get('progress')) != ANCHOR_LAST_PROGRESS:
+        return (False, f"末阶段进度必须为 {ANCHOR_LAST_PROGRESS}%")
+    # 遍历校验
+    reserved = {ANCHOR_FIRST_NAME, ANCHOR_LAST_NAME, get_refund_stage()}
+    seen = {ANCHOR_FIRST_NAME, ANCHOR_LAST_NAME}
+    prev = ANCHOR_FIRST_PROGRESS
+    for i, s in enumerate(stages):
+        if not isinstance(s, dict):
+            return (False, f"第 {i+1} 项结构非法")
+        name = (s.get('name') or '').strip()
+        if not name:
+            return (False, f"第 {i+1} 项名称为空")
+        progress = _to_int(s.get('progress'))
+        if progress is None:
+            return (False, f"第 {i+1} 项进度非法")
+        # 首末锚点已在 reserved 中，跳过重复校验
+        if i != 0 and i != len(stages) - 1:
+            if name in reserved:
+                return (False, f"阶段名「{name}」为保留锚点")
+            if name in seen:
+                return (False, f"阶段名「{name}」重复")
+            if not (prev < progress < ANCHOR_LAST_PROGRESS):
+                return (False, f"第 {i+1} 项进度必须严格递增且在 0-100 之间")
+        seen.add(name)
+        prev = progress
+    return (True, '')
+
+
+def _to_int(v) -> int | None:
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def get_order_stage_flow(order) -> list:
+    """取本单阶段快照（仅 stages 列表）。order 可为 dict/Row/dataclass。
+    优先级：orders.stage_flow JSON → 默认流程第一条的 stages。解析失败/损坏回退默认。
+    """
+    raw = None
+    if order is not None:
+        try:
+            raw = order['stage_flow'] if isinstance(order, dict) else getattr(order, 'stage_flow', None)
+        except Exception:
+            raw = None
+    if raw:
+        try:
+            data = json.loads(raw)
+            if isinstance(data, list) and len(data) >= 2:
+                # 返回浅拷贝避免调用方污染
+                return [{'name': s.get('name'), 'progress': _to_int(s.get('progress')) or 0}
+                        for s in data]
+        except Exception:
+            logging.error("stage_flow JSON 解析失败，回退默认流程: %r", raw[:200] if isinstance(raw, str) else raw)
+    flows = get_stage_flows()
+    return [dict(s) for s in flows[0]['stages']] if flows else _default_stage_flows()[0]['stages']
+
+
+def get_order_stage_names(order) -> list:
+    """便捷：本单快照阶段名列表（含锚点，不含退单）。看板快速切换按钮用。"""
+    return [s['name'] for s in get_order_stage_flow(order)]
+
+
+def parse_stage_flow_from_form(raw) -> str | None:
+    """表单 stage_flow 字段（JSON 字符串）解析。
+    返回解析后的 JSON 字符串（保持字符串形式供 db 层落库），或 None（未提供/空串）。
+    解析失败或校验不通过抛 ValueError，调用方应返回 400。
+    """
+    if raw is None:
+        return None
+    s = raw if isinstance(raw, str) else str(raw)
+    s = s.strip()
+    if not s:
+        return None
+    try:
+        data = json.loads(s)
+    except Exception as e:
+        raise ValueError(f"stage_flow JSON 非法：{e}")
+    if not isinstance(data, list):
+        raise ValueError("stage_flow 必须是数组")
+    ok, msg = validate_stage_flow(data)
+    if not ok:
+        raise ValueError(msg)
+    # 重新序列化为规范 JSON（去多余空格/转义），统一落库
+    return json.dumps(data, ensure_ascii=False)
+
+
+
 
 
 def _paid_status_sql(field='payment_status'):
@@ -532,6 +967,17 @@ def _ensure_default_settings(conn):
         'cal_payment_已结算': '#0ca30c',
         'cal_payment_欠款': '#d03b3b',
         'cal_payment_免收': '#008300',
+        # Spec12 阶段流程预设：JSON 数组，每项为一条流程（中间阶段由 STAGE_META 非终态派生）
+        'stage_flows': json.dumps([
+            {'name': '默认流程', 'stages': [
+                {'name': '待开始', 'progress': 0},
+                {'name': '色稿',   'progress': 20},
+                {'name': '线稿',   'progress': 40},
+                {'name': '细化',   'progress': 60},
+                {'name': '收尾',   'progress': 80},
+                {'name': '完成',   'progress': 100},
+            ]},
+        ], ensure_ascii=False),
     }
     for k, v in defaults.items():
         conn.execute(
@@ -610,6 +1056,62 @@ def sync_choice_renames(conn, data: dict, settings_key: str, order_field: str) -
     return renamed
 
 
+def merge_commission_types(old_names: list, new_name: str) -> dict:
+    """类别合并：将多个旧类别名统一更新为新名称，并同步更新 commission_type_list 和颜色配置。
+
+    返回 {'merged': {old: count}, 'total': int}。
+    """
+    if not old_names or not new_name.strip():
+        return {'merged': {}, 'total': 0}
+    new_name = new_name.strip()
+    merged = {}
+    with transaction() as conn:
+        for old in old_names:
+            old = old.strip()
+            if not old or old == new_name:
+                continue
+            cnt = conn.execute(
+                "UPDATE orders SET commission_type = ?, updated_at = datetime('now','localtime') WHERE commission_type = ?",
+                (new_name, old)
+            ).rowcount
+            if cnt > 0:
+                merged[old] = cnt
+        # 更新 commission_type_list：移除旧名，确保新名存在
+        ct_list_raw = conn.execute(
+            "SELECT value FROM settings WHERE key = 'commission_type_list'"
+        ).fetchone()
+        if ct_list_raw:
+            items = [x.strip() for x in ct_list_raw['value'].split(',') if x.strip()]
+            items = [x for x in items if x not in old_names]
+            if new_name not in items:
+                items.append(new_name)
+            conn.execute(
+                "INSERT OR REPLACE INTO settings (key, value) VALUES ('commission_type_list', ?)",
+                (','.join(items),)
+            )
+        # 迁移颜色配置：如果旧类别有自定义颜色且新类别无配置，则继承第一个旧类别的颜色
+        for old in merged:
+            old_color_key = f'cal_commission_{old}'
+            new_color_key = f'cal_commission_{new_name}'
+            old_color = conn.execute(
+                "SELECT value FROM settings WHERE key = ?", (old_color_key,)
+            ).fetchone()
+            if old_color:
+                existing_new = conn.execute(
+                    "SELECT value FROM settings WHERE key = ?", (new_color_key,)
+                ).fetchone()
+                if not existing_new:
+                    conn.execute(
+                        "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+                        (new_color_key, old_color['value'])
+                    )
+                conn.execute("DELETE FROM settings WHERE key = ?", (old_color_key,))
+    _invalidate_choices_cache()
+    total = sum(merged.values())
+    logger.info('类别合并：%s → 「%s」，共更新 %d 单', list(merged.keys()), new_name, total)
+    return {'merged': merged, 'total': total}
+
+
 def get_default_fee_for_source(source: str) -> float:
     """P19-F9：来源默认费率 %（设置键 default_fee_<source>，缺省 5.0，与订单表单默认值一致）；
     非平台来源/空来源 → 0.0（无手续费语义）。读已提交设置（自开连接），供写入管线使用。"""
@@ -681,6 +1183,9 @@ ORDER_TEMPLATE_FIELDS = (
     'customer_id', 'project_name', 'source', 'is_commercial',
     'commission_type', 'current_stage', 'payment_status',
     'platform_url', 'deposit', 'balance', 'platform_fee_pct', 'notes',
+    'stage_flow',  # Spec12 阶段流程快照（模板可携带流程）
+    'scheduled_start', 'scheduled_end', 'page_deadline',  # 排期字段
+    'estimated_hours', 'work_hours', 'exclude_hourly',  # 工时字段
 )
 
 
@@ -972,10 +1477,13 @@ def create_order(data: dict) -> int:
             'deposit', 'balance', 'platform_fee', 'platform_fee_pct', 'income', 'actual_received',
             'payment_status', 'is_archived',
             'notes', 'custom_color', 'platform_url', 'page_deadline', 'scheduled_start', 'scheduled_end', 'sort_order',
-            'completed_at', 'is_overdue'
+            'completed_at', 'is_overdue',
+            'estimated_hours', 'work_hours', 'exclude_hourly',  # P20b 时薪
+            'stage_flow',  # Spec12 阶段流程快照
         ]
         nullable = {'customer_id', 'commission_type', 'notes', 'custom_color',
-                    'platform_url', 'page_deadline', 'scheduled_start', 'scheduled_end', 'completed_at'}
+                    'platform_url', 'page_deadline', 'scheduled_start', 'scheduled_end', 'completed_at',
+                    'estimated_hours', 'work_hours', 'stage_flow'}
         # P19-F4 文本列缺省写列 DEFAULT/''，禁止写数字 0（修复幽灵值来源之一）
         text_defaults = {'project_name': '', 'source': '米画师', 'current_stage': '待开始',
                          'ddl_status': '正常', 'payment_status': '未收款'}
@@ -1025,10 +1533,13 @@ def create_order_with_template(data: dict, template_name: str | None = None,
             'deposit', 'balance', 'platform_fee', 'platform_fee_pct', 'income', 'actual_received',
             'payment_status', 'is_archived',
             'notes', 'custom_color', 'platform_url', 'page_deadline', 'scheduled_start', 'scheduled_end', 'sort_order',
-            'completed_at', 'is_overdue'
+            'completed_at', 'is_overdue',
+            'estimated_hours', 'work_hours', 'exclude_hourly',  # P20b 时薪
+            'stage_flow',  # Spec12 阶段流程快照
         ]
         nullable = {'customer_id', 'commission_type', 'notes', 'custom_color',
-                    'platform_url', 'page_deadline', 'scheduled_start', 'scheduled_end', 'completed_at'}
+                    'platform_url', 'page_deadline', 'scheduled_start', 'scheduled_end', 'completed_at',
+                    'estimated_hours', 'work_hours', 'stage_flow'}
         text_defaults = {'project_name': '', 'source': '米画师', 'current_stage': '待开始',
                          'ddl_status': '正常', 'payment_status': '未收款'}
         row = {}
@@ -1134,6 +1645,8 @@ def update_order(order_id: int, data: dict) -> bool:
             'notes', 'custom_color', 'platform_url', 'page_deadline', 'scheduled_start', 'scheduled_end',
             'image_url', 'image_path', 'has_image',
             'completed_at', 'is_overdue',
+            'estimated_hours', 'work_hours', 'exclude_hourly',  # P20b 时薪三列（不进 _MONEY_FIELDS，不触发财务重算）
+            'stage_flow',  # Spec12 阶段流程快照
             'sort_order', 'created_at', 'updated_at'
         }
         # 未触发任何管线时仅写传入字段（部分更新语义保留）；触发过管线则写全 merged
@@ -1203,13 +1716,46 @@ def recompute_order(order_id: int) -> bool:
 
 
 def delete_order(order_id: int) -> bool:
-    """删除订单（P19-F5：删除+客户重算单事务）"""
+    """删除订单（P19-F5：删除+客户重算单事务）。
+    删除后自动清理无用的类别/阶段/来源颜色配置（cal_commission_*/cal_stage_*/cal_source_*）。
+    """
     with transaction() as conn:
-        row = conn.execute("SELECT customer_id FROM orders WHERE id = ?", (order_id,)).fetchone()
+        row = conn.execute(
+            "SELECT customer_id, commission_type, current_stage, source FROM orders WHERE id = ?",
+            (order_id,)
+        ).fetchone()
         conn.execute("DELETE FROM orders WHERE id = ?", (order_id,))
         if row and row['customer_id']:
             recalc_customer_stats(row['customer_id'], conn=conn)
+        # 自动清理：检查类别/阶段/来源是否还有订单使用，无则移除对应颜色配置
+        _cleanup_unused_color_settings(conn, row)
     return True
+
+
+def _cleanup_unused_color_settings(conn, deleted_row) -> None:
+    """删除订单后检查三个字段（commission_type/current_stage/source），
+    如果某值不再被任何订单使用，则从 settings 表移除对应 cal_* 颜色配置。
+    """
+    if not deleted_row:
+        return
+    # (字段名, 颜色前缀, 是否允许清理)
+    checks = [
+        ('commission_type', 'cal_commission_', True),
+        ('current_stage', 'cal_stage_', True),
+        ('source', 'cal_source_', True),
+    ]
+    for field, prefix, _ in checks:
+        value = deleted_row[field]
+        if not value:
+            continue
+        still_used = conn.execute(
+            f"SELECT COUNT(*) FROM orders WHERE {field} = ?",
+            (value,)
+        ).fetchone()[0]
+        if still_used == 0:
+            color_key = f'{prefix}{value}'
+            conn.execute("DELETE FROM settings WHERE key = ?", (color_key,))
+            logger.info('字段 %s 值「%s」已无订单使用，自动清理颜色配置 %s', field, value, color_key)
 
 
 # ═══════════════════════════════════════════════════════════
@@ -1363,6 +1909,31 @@ def set_order_archived(order_id: int, archived: bool) -> bool:
     return True
 
 
+def _apply_days_remaining_for_rows(rows: list[dict]) -> list[dict]:
+    """查询时计算 days_remaining：距 scheduled_end 的天数差。
+
+    终态（完成/退单）和已归档订单 → None；无 scheduled_end 或解析失败 → None。
+    """
+    from datetime import date as dt_date
+    today = dt_date.today()
+    terminal = get_terminal_stages()
+    for r in rows:
+        stage = r.get('current_stage', '')
+        if stage in terminal or r.get('is_archived'):
+            r['days_remaining'] = None
+            continue
+        end_str = r.get('scheduled_end', '')
+        if not end_str or not end_str.strip():
+            r['days_remaining'] = None
+            continue
+        try:
+            end_date = dt_date.fromisoformat(end_str.strip()[:10])
+            r['days_remaining'] = (end_date - today).days
+        except (ValueError, TypeError):
+            r['days_remaining'] = None
+    return rows
+
+
 def _refresh_ddl_for_rows(rows: list[dict]) -> list[dict]:
     """读取时刷新 DDL 状态（处理时间推移导致的逾期）"""
     terminal = get_terminal_stages()  # P19-F2：终态元数据（取代位置魔法）
@@ -1407,6 +1978,8 @@ def _apply_repeat_for_rows(rows: list[dict], conn=None) -> list[dict]:
             cnt -= 1
         r['repeat_count'] = cnt
         r['is_repeat'] = 1 if cnt > 0 else 0
+    # 查询时计算剩余天数（与复购标记同路径注入，覆盖所有读取入口）
+    _apply_days_remaining_for_rows(rows)
     return rows
 
 
@@ -1467,6 +2040,9 @@ def list_orders(filters: dict | None = None) -> list[dict]:
     if filters.get('source'):
         where.append("o.source = ?")
         params.append(filters['source'])
+    if filters.get('commission_type'):
+        where.append("o.commission_type = ?")
+        params.append(filters['commission_type'])
     if filters.get('status'):
         where.append("o.ddl_status = ?")
         params.append(filters['status'])
@@ -1630,7 +2206,10 @@ CALENDAR_COLOR_FIELDS = {
 
 def get_merged_palette(color_mode: str) -> dict:
     """#43：合并默认调色板 + 用户自定义设置（键 `cal_<mode>_<标签>`），返回 {标签: 颜色}。
-    日历着色与收入页品类甜甜圈共用此一套配置（单一数据源，跳页同色）。"""
+    日历着色与收入页品类甜甜圈共用此一套配置（单一数据源，跳页同色）。
+    Spec12：stage 模式下自动发现 stage_flows 中的自定义阶段名，未配置 cal_stage_* 时
+    从固定分类色板中轮询分配，保证自定义阶段有区分度。
+    """
     palette = dict(CALENDAR_PALETTES.get(color_mode, CALENDAR_PALETTES['stage']))
     prefix = f'cal_{color_mode}_'
     try:
@@ -1639,7 +2218,32 @@ def get_merged_palette(color_mode: str) -> dict:
                 palette[k[len(prefix):]] = v
     except Exception as e:
         logging.error(f'get_merged_palette 读取设置失败 (mode={color_mode}): {e}')
+    # Spec12：为 stage_flows 中的自定义阶段名补充回退色
+    if color_mode == 'stage':
+        _auto_stage_fallback_colors(palette)
     return palette
+
+
+# Spec12：自定义阶段回退色板（categorical，避免与已有 --stage-* 冲突）
+_STAGE_FALLBACK_COLORS = [
+    '#6366f1', '#06b6d4', '#f59e0b', '#ec4899', '#14b8a6',
+    '#8b5cf6', '#f97316', '#84cc16', '#e11d48', '#0ea5e9',
+]
+
+
+def _auto_stage_fallback_colors(palette: dict) -> None:
+    """为 stage_flows 中尚未在 palette 中出现的阶段名分配回退色。"""
+    try:
+        flows = get_stage_flows()
+    except Exception:
+        return
+    idx = 0
+    for flow in flows:
+        for s in flow.get('stages', []):
+            name = s.get('name', '')
+            if name and name not in palette:
+                palette[name] = _STAGE_FALLBACK_COLORS[idx % len(_STAGE_FALLBACK_COLORS)]
+                idx += 1
 
 
 def _calendar_filter_sql(filters: dict | None) -> tuple:
@@ -1762,7 +2366,7 @@ def get_unscheduled_orders(filters: dict | None = None, show_archived: bool = Fa
         ORDER BY o.sort_order ASC, o.created_at DESC
     """, filter_params).fetchall()
     conn.close()
-    return [dict(r) for r in rows]
+    return _apply_days_remaining_for_rows([dict(r) for r in rows])
 
 
 def get_overdue_orders() -> list[dict]:
@@ -1879,13 +2483,26 @@ def reschedule_order(order_id: int, start: str, end: str) -> bool:
 # 批量操作（P19-F5：逐条多事务 → 整批单事务）
 # ═══════════════════════════════════════════════════════════
 
-def batch_update_stage(order_ids: list[int], new_stage: str) -> int:
-    """批量改阶段：整批单事务，每单走 DDL+条件归档管线。返回成功数。"""
-    count = 0
+def batch_update_stage(order_ids: list[int], new_stage: str) -> dict:
+    """批量改阶段（Spec12 快照内校验）：整批单事务，每单走 DDL+条件归档管线。
+
+    返回 dict：
+    - count: 成功数
+    - skipped: 跳过数（该单快照不含目标阶段且非退单）
+    - skip_ids: 被跳过的订单 ID 列表（供 Toast 提示）
+    """
+    count, skipped, skip_ids = 0, 0, []
+    refund = get_refund_stage()
     with transaction() as conn:
         for oid in order_ids:
             row = conn.execute("SELECT * FROM orders WHERE id = ?", (oid,)).fetchone()
             if not row:
+                continue
+            # Spec12：本单快照 + 退单 才允许；快照外阶段跳过并记录
+            allowed = set(get_order_stage_names(dict(row))) | {refund}
+            if new_stage not in allowed:
+                skipped += 1
+                skip_ids.append(oid)
                 continue
             data = dict(row)
             data['current_stage'] = new_stage
@@ -1897,7 +2514,7 @@ def batch_update_stage(order_ids: list[int], new_stage: str) -> int:
                 (new_stage, data.get('ddl_status'), int(data.get('is_archived') or 0),
                  data.get('completed_at'), int(data.get('is_overdue') or 0), oid))
             count += 1
-    return count
+    return {'count': count, 'skipped': skipped, 'skip_ids': skip_ids}
 
 
 def batch_set_archived(order_ids: list[int], archived: bool) -> int:
@@ -2195,9 +2812,10 @@ def metric_overdue_orders(conn=None) -> list[dict]:
            ORDER BY o.scheduled_end ASC""",
         params
     ).fetchall()
+    result = _apply_days_remaining_for_rows([dict(r) for r in rows])
     if close:
         c.close()
-    return [dict(r) for r in rows]
+    return result
 
 
 def metric_overdue_count(conn=None) -> int:
@@ -2535,6 +3153,166 @@ def _fill_monthly_result(rows, months, value_key):
     return [{'month': f"{m}月", value_key: round(row_map.get(m, 0), 2)} for m in range(1, months + 1)]
 
 
+# ═══════════════════════════════════════════════════════════
+# P20b 时薪统计（口径见 spec12 §3：已完成 且 work_hours>0 且未排除；
+# 月归属 scheduled_end；汇总时薪 = SUM(actual_received)/SUM(work_hours) 加权）
+# ═══════════════════════════════════════════════════════════
+
+def _hourly_filter_sql() -> tuple[str, list]:
+    """时薪统计统一过滤条件（参数化，供各统计函数拼接）"""
+    return ("current_stage = ? AND work_hours > 0 AND exclude_hourly = 0", [get_done_stage()])
+
+
+def _weighted_rate(amount, hours):
+    """加权时薪：总实收/总工时；无工时返回 None（前端显 —）"""
+    return round(amount / hours, 2) if hours else None
+
+
+def get_hourly_rate_summary(year: int = None) -> dict:
+    """时薪统计卡三值：本月加权时薪（自然月，跟随今天）/ 指定年加权时薪 / 平均预估偏差"""
+    if year is None:
+        year = date.today().year
+    conn = get_db()
+    cond, params = _hourly_filter_sql()
+    today = date.today()
+    month_row = conn.execute(
+        f"""SELECT COALESCE(SUM(actual_received), 0) as amt, COALESCE(SUM(work_hours), 0) as hrs
+            FROM orders
+            WHERE {cond} AND scheduled_end IS NOT NULL
+              AND strftime('%Y-%m', scheduled_end) = ?""",
+        tuple(params) + (f"{today.year}-{today.month:02d}",)
+    ).fetchone()
+    year_row = conn.execute(
+        f"""SELECT COALESCE(SUM(actual_received), 0) as amt, COALESCE(SUM(work_hours), 0) as hrs
+            FROM orders
+            WHERE {cond} AND scheduled_end >= ? AND scheduled_end < ?""",
+        tuple(params) + (f"{year}-01-01", f"{year+1}-01-01")
+    ).fetchone()
+    bias_row = conn.execute(
+        f"""SELECT AVG((work_hours - estimated_hours) * 1.0 / estimated_hours) as bias
+            FROM orders
+            WHERE {cond} AND estimated_hours > 0
+              AND scheduled_end >= ? AND scheduled_end < ?""",
+        tuple(params) + (f"{year}-01-01", f"{year+1}-01-01")
+    ).fetchone()
+    conn.close()
+    return {
+        'month_rate': _weighted_rate(month_row['amt'], month_row['hrs']),
+        'year_rate': _weighted_rate(year_row['amt'], year_row['hrs']),
+        'avg_bias': round(bias_row['bias'], 4) if bias_row['bias'] is not None else None,
+    }
+
+
+def get_monthly_hourly_trend(year: int = None) -> list[dict]:
+    """月度时薪趋势：12 月每月 {加权时薪, 单数, 总工时}；空月 rate=None（折线 spanGaps 断开）"""
+    if year is None:
+        year = date.today().year
+    conn = get_db()
+    cond, params = _hourly_filter_sql()
+    rows = conn.execute(
+        f"""SELECT CAST(strftime('%m', scheduled_end) AS INTEGER) as m,
+                  COALESCE(SUM(actual_received), 0) as amt,
+                  COALESCE(SUM(work_hours), 0) as hrs,
+                  COUNT(*) as cnt
+           FROM orders
+           WHERE {cond} AND scheduled_end >= ? AND scheduled_end < ?
+           GROUP BY m ORDER BY m""",
+        tuple(params) + (f"{year}-01-01", f"{year+1}-01-01")
+    ).fetchall()
+    conn.close()
+    row_map = {r['m']: r for r in rows}
+    result = []
+    for m in range(1, 13):
+        r = row_map.get(m)
+        result.append({
+            'month': f"{m}月",
+            'rate': _weighted_rate(r['amt'], r['hrs']) if r else None,
+            'count': r['cnt'] if r else 0,
+            'hours': round(r['hrs'], 1) if r else 0,
+        })
+    return result
+
+
+def _hourly_group_stats(group_col: str, year: int, month: int = None) -> list[dict]:
+    """按维度分组的加权时薪（内部：group_col 仅取白名单列，非用户输入）"""
+    conn = get_db()
+    cond, params = _hourly_filter_sql()
+    sql = (
+        f"""SELECT COALESCE(NULLIF({group_col}, ''), '未分类') as name,
+                  COALESCE(SUM(actual_received), 0) as amt,
+                  COALESCE(SUM(work_hours), 0) as hrs,
+                  COUNT(*) as cnt
+           FROM orders
+           WHERE {cond} AND scheduled_end >= ? AND scheduled_end < ?"""
+    )
+    sql_params = tuple(params) + (f"{year}-01-01", f"{year+1}-01-01")
+    if month:
+        sql += " AND CAST(strftime('%m', scheduled_end) AS INTEGER) = ?"
+        sql_params += (month,)
+    sql += " GROUP BY name"
+    rows = conn.execute(sql, sql_params).fetchall()
+    conn.close()
+    result = [{
+        'name': r['name'],
+        'rate': _weighted_rate(r['amt'], r['hrs']),
+        'count': r['cnt'],
+        'hours': round(r['hrs'], 1),
+    } for r in rows if r['hrs']]
+    result.sort(key=lambda x: x['rate'], reverse=True)
+    return result
+
+
+def get_hourly_by_commission_type(year: int = None, month: int = None) -> list[dict]:
+    """品类时薪对比（支持月份筛选，仿 type-distribution）"""
+    if year is None:
+        year = date.today().year
+    return _hourly_group_stats('commission_type', year, month)
+
+
+def get_hourly_by_source(year: int = None) -> list[dict]:
+    """来源时薪对比（抽成后真实时薪：actual_received 已扣手续费）"""
+    if year is None:
+        year = date.today().year
+    return _hourly_group_stats('source', year)
+
+
+def get_quote_sample(commission_type: str = None) -> dict | None:
+    """报价样本：严格基于相同类别(commission_type)的完成单计算。
+
+    无类别 / 该类别无完成单 → 返回 None（不降级全局）。
+    返回 {rate: 加权时薪, rates: 单笔时薪升序列表, count, scope: 'type'}。
+    """
+    if not commission_type:
+        return None
+    conn = get_db()
+    cond, params = _hourly_filter_sql()
+    rows = conn.execute(
+        f"""SELECT actual_received, work_hours FROM orders
+            WHERE {cond} AND actual_received > 0 AND commission_type = ?""",
+        tuple(params) + (commission_type,)
+    ).fetchall()
+    conn.close()
+    if not rows:
+        return None
+    total_amt = sum(r['actual_received'] for r in rows)
+    total_hrs = sum(r['work_hours'] for r in rows)
+    rates = sorted(r['actual_received'] / r['work_hours'] for r in rows)
+    return {
+        'rate': _weighted_rate(total_amt, total_hrs),
+        'rates': [round(x, 2) for x in rates],
+        'count': len(rows),
+        'scope': 'type',
+    }
+
+
+def update_order_work_hours(order_id: int, work_hours: float) -> bool:
+    """补录实际工时（补录弹窗「保存」，复用 update_order 单管线）"""
+    return update_order(order_id, {'work_hours': work_hours})
+
+
+def set_order_exclude_hourly(order_id: int) -> bool:
+    """单订单排除时薪统计（补录弹窗「此单不统计」，永不再弹）"""
+    return update_order(order_id, {'exclude_hourly': 1})
 
 
 # ═══════════════════════════════════════════════════════════
@@ -2635,7 +3413,7 @@ def get_customer_orders(customer_id: int) -> list[dict]:
         (customer_id,)
     ).fetchall()
     conn.close()
-    return [dict(r) for r in rows]
+    return _apply_days_remaining_for_rows([dict(r) for r in rows])
 
 
 def get_customer_images(customer_id: int) -> list[dict]:

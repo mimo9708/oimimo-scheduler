@@ -1,6 +1,11 @@
 {% extends "base.html" %}
 {% block title %}设置 — oimimo scheduler{% endblock %}
 
+{% block head_extra %}
+    <!-- SortableJS（阶段流程拖拽排序） -->
+    <script src="{{ url_for('static', filename='vendor/sortable.min.js') }}"></script>
+{% endblock %}
+
 {% block content %}
 <div class="page-header">
     <div>
@@ -9,7 +14,7 @@
     <div style="display:flex;gap:var(--space-sm);">
         <button class="btn btn-primary" onclick="var f=document.getElementById('settings-form'); f.requestSubmit ? f.requestSubmit() : f.submit();">保存全部</button>
         <form method="POST" action="/settings/reset" style="display:inline;"
-              onsubmit="return confirm('确定要恢复默认设置吗？')">
+              onsubmit="return confirm('确定要恢复默认设置吗？这将重置主题、选项列表等配置为出厂值。订单和客户数据不受影响。')">
             <button class="btn btn-secondary">恢复默认</button>
         </form>
     </div>
@@ -35,9 +40,8 @@
         <input type="hidden" name="active_custom_theme" id="active-custom-theme-input" value="{{ active_custom_theme }}">
         <!-- 预设主题 -->
         <div class="card" style="margin-bottom:var(--space-md);">
-            <div class="card-header">预设主题</div>
+            <div class="card-header has-tip">预设主题<span class="tip-trigger">?<span class="header-tip">选择一个预设主题可快速切换整套配色。选择后仍可在下方微调单个颜色，点击「保存全部」生效。</span></span></div>
             <div class="card-body">
-                <p style="font-size:0.85rem;color:var(--color-text-secondary);margin-bottom:var(--space-lg);">选择一个预设主题可快速切换整套配色。选择后仍可在下方微调单个颜色，点击「保存全部」生效。</p>
                 <div style="display:grid;grid-template-columns:repeat(auto-fill, minmax(200px, 1fr));gap:var(--space-sm);">
                     {% for preset in preset_themes %}
                     <div class="preset-card" data-preset-id="{{ preset.id }}"
@@ -60,19 +64,19 @@
         </div>
         <!-- 自定义 CSS 主题（P16j） · P18-F4.2：默认折叠，状态记 localStorage -->
         <div class="card" style="margin-bottom:var(--space-md);">
-            <div class="card-header" id="css-theme-header" onclick="toggleCssTheme()" style="cursor:pointer;display:flex;align-items:center;justify-content:space-between;user-select:none;">
-                <span>自定义 CSS 主题</span>
-                <i data-lucide="chevron-down" id="css-theme-chevron" style="width:18px;height:18px;transition:transform 0.15s;"></i>
+            <div class="card-header has-tip" id="css-theme-header" onclick="toggleCssTheme()" style="cursor:pointer;display:flex;align-items:center;user-select:none;">
+                <span style="flex:1;">自定义 CSS 主题</span>
+                <span class="tip-trigger" onclick="event.stopPropagation();">?<span class="header-tip">粘贴 CSS 覆盖主题变量（例如 :root { --color-accent: #ff5c5c; }），命名后保存为预设。仅接受纯 CSS，最大 20000 字符，自动剔除脚本等非法内容。选用后其 CSS 优先级高于上方预设。</span></span>
+                <i data-lucide="chevron-down" id="css-theme-chevron" style="width:18px;height:18px;transition:transform 0.15s;margin-left:8px;"></i>
             </div>
             <div class="card-body" id="css-theme-body" style="display:none;">
-                <p style="font-size:0.85rem;color:var(--color-text-secondary);margin-bottom:var(--space-md);">粘贴 CSS 覆盖主题变量（例如 <code>:root { --color-accent: #ff5c5c; }</code>），命名后保存为预设。仅接受纯 CSS，最大 20000 字符，自动剔除脚本等非法内容。选用后其 CSS 优先级高于上方预设。</p>
                 {% if theme_err %}
                 <div style="padding:8px 12px;margin-bottom:var(--space-md);border-radius:var(--radius-sm);background:var(--color-danger-bg);color:var(--color-danger);font-size:0.85rem;">⚠ 导入失败：{{ theme_err }}</div>
                 {% endif %}
                 {% if custom_themes %}
                 <div style="display:grid;grid-template-columns:repeat(auto-fill, minmax(200px, 1fr));gap:var(--space-sm);margin-bottom:var(--space-lg);">
                     {% for t in custom_themes %}
-                    <div class="preset-card" style="padding:14px;border:2px solid {% if t.id == active_custom_theme %}var(--color-accent){% else %}var(--color-border){% endif %};border-radius:var(--radius-md);{% if t.id == active_custom_theme %}background:color-mix(in srgb, var(--color-accent) 6%, transparent);{% endif %}">
+                    <div class="preset-card" style="padding:14px;background:var(--color-surface);border:1px solid {% if t.id == active_custom_theme %}var(--color-accent){% else %}var(--color-border){% endif %};border-radius:var(--radius-md);box-shadow:var(--shadow-xs);{% if t.id == active_custom_theme %}background:color-mix(in srgb, var(--color-accent) 6%, var(--color-surface));{% endif %}">
                         <div style="font-weight:600;font-size:0.9rem;word-break:break-all;">{{ t.name }}</div>
                         {% if t.id == active_custom_theme %}
                         <div style="font-size:0.7rem;color:var(--color-accent);margin-top:4px;font-weight:600;">✓ 当前</div>
@@ -98,9 +102,8 @@
         </div>
         <!-- #45 R3：着色模式（原「日历着色模式」，统一管理全站标签着色） -->
         <div class="card" style="margin-bottom:var(--space-md);">
-            <div class="card-header">着色模式</div>
+            <div class="card-header has-tip">着色模式<span class="tip-trigger">?<span class="header-tip">此处配色统一作用于日历、订单徽章、收入图表等所有标签着色。</span></span></div>
             <div class="card-body">
-                <p style="font-size:0.85rem;color:var(--color-text-secondary);margin-bottom:var(--space-md);">此处配色统一作用于日历、订单徽章、收入图表等所有标签着色。</p>
                 <div style="display:flex;gap:2px;margin-bottom:var(--space-lg);flex-wrap:wrap;">
                     {% for mode in cal_modes %}
                     <button type="button" class="mode-tab" data-mode="{{ mode.id }}"
@@ -111,9 +114,9 @@
                 {% for mode in cal_modes %}
                 <div class="mode-panel" id="cal-panel-{{ mode.id }}" style="display:none;">
                     {% if mode.id == 'commission' %}
-                    <p style="font-size:0.82rem;color:var(--color-text-tertiary);margin-bottom:var(--space-sm);">该配色同时用于收入页「品类分布」图表，改动后两处同步生效。</p>
+                    <span class="inline-tip-wrap"><span class="inline-tip">?<span class="inline-tip-text">该配色同时用于收入页「品类分布」图表，改动后两处同步生效。</span></span></span>
                     {% elif mode.id == 'stage' %}
-                    <p style="font-size:0.82rem;color:var(--color-text-tertiary);margin-bottom:var(--space-sm);">阶段配色同时作用于全站阶段徽章与甘特图，改动后各处同步生效。</p>
+                    <span class="inline-tip-wrap"><span class="inline-tip">?<span class="inline-tip-text">阶段配色同时作用于全站阶段徽章与甘特图，改动后各处同步生效。</span></span></span>
                     {% endif %}
                     <div style="display:flex;border-radius:var(--radius-md);overflow:hidden;height:28px;margin-bottom:var(--space-md);">
                         {% for item in cal_palettes[mode.id] %}
@@ -137,20 +140,41 @@
                 {% endfor %}
                 <!-- #45 R5：配色预设（整套 cal_* 配色命名保存/切换，交互仿「自定义 CSS 主题」） -->
                 <div style="margin-top:var(--space-lg);padding-top:var(--space-md);border-top:1px solid var(--color-border);">
-                    <label style="font-size:0.85rem;font-weight:600;">配色预设</label>
-                    <p style="font-size:0.78rem;color:var(--color-text-tertiary);margin:4px 0 0;">把当前整套着色配色命名保存，可随时切换。以已「保存全部」的值为准，改色后请先保存再存预设；点预设上的「更新」可把当前配色存回该预设。</p>
+                    <div style="display:flex;align-items:center;gap:0;margin-bottom:var(--space-sm);">
+                        <label style="font-size:0.85rem;font-weight:600;">配色预设</label>
+                        <span class="inline-tip">?<span class="inline-tip-text">把当前整套着色配色命名保存，可随时切换。以已「保存全部」的值为准，改色后请先保存再存预设；点预设上的「更新」可把当前配色存回该预设。</span></span>
+                    </div>
                     {% if palette_err %}
                     <div style="padding:8px 12px;margin-top:6px;border-radius:var(--radius-sm);background:var(--color-danger-bg);color:var(--color-danger);font-size:0.85rem;">⚠ {{ palette_err }}</div>
                     {% endif %}
                     {% if palette_presets %}
-                    <div style="display:grid;grid-template-columns:repeat(auto-fill, minmax(160px, 1fr));gap:var(--space-sm);margin-top:var(--space-sm);">
+                    <div style="display:grid;grid-template-columns:repeat(auto-fill, minmax(180px, 1fr));gap:var(--space-md);margin-top:var(--space-md);">
                         {% for p in palette_presets %}
-                        <div style="padding:10px 12px;border:2px solid {% if p.id == palette_active_id %}var(--color-primary){% else %}var(--color-border){% endif %};border-radius:var(--radius-md);">
-                            <div style="font-weight:600;font-size:0.88rem;word-break:break-all;">{{ p.name }}{% if p.id == palette_active_id %} <span style="font-size:0.7rem;font-weight:500;color:var(--color-primary);">使用中</span>{% endif %}</div>
-                            <div style="display:flex;gap:6px;margin-top:8px;">
-                                <button type="button" class="btn btn-secondary btn-sm" style="flex:1;" onclick="applyPalettePreset('{{ p.id }}')">选用</button>
-                                <button type="button" class="btn btn-ghost btn-sm" onclick="updatePalettePreset('{{ p.id }}')">更新</button>
-                                <button type="button" class="btn btn-ghost btn-sm" style="color:var(--color-danger);" onclick="deletePalettePreset('{{ p.id }}')">删除</button>
+                        <div class="palette-preset-card">
+                            {# 色彩预览条 #}
+                            <div class="palette-preview-bar">
+                                {% set ns = namespace(count=0) %}
+                                {% for ck, cv in p.colors.items() %}
+                                {% if ck.startswith('cal_') %}
+                                {% if ns.count < 10 %}
+                                <div style="flex:1;background:{{ cv }};"></div>
+                                {% endif %}
+                                {% set ns.count = ns.count + 1 %}
+                                {% endif %}
+                                {% endfor %}
+                            </div>
+                            {# 名称 + 状态 #}
+                            <div class="palette-card-body">
+                                <div class="palette-card-name">{{ p.name }}</div>
+                                {% if p.id == palette_active_id %}
+                                <span class="palette-active-badge">使用中</span>
+                                {% endif %}
+                            </div>
+                            {# 按钮区 #}
+                            <div class="palette-card-footer">
+                                <button type="button" class="btn btn-secondary btn-sm" style="flex:1;font-size:0.78rem;padding:3px 8px;" onclick="applyPalettePreset('{{ p.id }}')">选用</button>
+                                <button type="button" class="btn btn-ghost btn-sm" style="font-size:0.78rem;padding:3px 6px;" onclick="updatePalettePreset('{{ p.id }}')">更新</button>
+                                <button type="button" class="btn btn-ghost btn-sm" style="color:var(--color-danger);font-size:0.78rem;padding:3px 6px;" onclick="deletePalettePreset('{{ p.id }}')">删除</button>
                             </div>
                         </div>
                         {% endfor %}
@@ -187,11 +211,8 @@
     <!-- ═══════════ Tab: 订单属性 ═══════════ -->
     <div id="panel-source" style="display:none;">
         <div class="card" style="margin-bottom:var(--space-md);">
-            <div class="card-header">来源管理</div>
+            <div class="card-header has-tip">来源管理<span class="tip-trigger">?<span class="header-tip">勾选「平台」的来源会在订单中显示手续费计算，未勾选的来源不计算手续费（直接收全款）。</span></span></div>
             <div class="card-body">
-                <p style="font-size:0.88rem;color:var(--color-text-secondary);margin-bottom:var(--space-lg);">
-                    勾选「平台」的来源会在订单中显示手续费计算，未勾选的来源不计算手续费（直接收全款）。
-                </p>
                 <div style="display:grid;grid-template-columns:repeat(auto-fill, minmax(280px, 1fr));gap:var(--space-sm);">
                     {% for src in source_list %}
                     {% set is_plat = src in platform_sources %}
@@ -224,9 +245,8 @@
         </div>
         <!-- 收款状态（系统锁定，不可自定义） -->
         <div class="card" style="margin-bottom:var(--space-md);">
-            <div class="card-header">收款状态</div>
+            <div class="card-header has-tip">收款状态<span class="tip-trigger">?<span class="header-tip">以下为系统预置收款状态，不可自定义。</span></span></div>
             <div class="card-body">
-                <p style="font-size:0.82rem;color:var(--color-text-tertiary);margin-bottom:var(--space-sm);">以下为系统预置收款状态，不可自定义。</p>
                 <div style="display:flex;flex-wrap:wrap;gap:6px;">
                     {% for ps in PAYMENT_CHOICES %}
                     <span class="settings-tag">{{ ps }}</span>
@@ -236,9 +256,8 @@
         </div>
         <!-- 稿件类别管理 -->
         <div class="card" style="margin-bottom:var(--space-md);">
-            <div class="card-header">稿件类别管理</div>
+            <div class="card-header has-tip">稿件类别管理<span class="tip-trigger">?<span class="header-tip">自定义稿件类别。修改后订单表单中的类别下拉将同步更新。</span></span></div>
             <div class="card-body">
-                <p style="font-size:0.88rem;color:var(--color-text-secondary);margin-bottom:var(--space-sm);">自定义稿件类别。修改后订单表单中的类别下拉将同步更新。</p>
                 <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:var(--space-md);" id="commission-type-tags">
                     {% for ct in all_settings.get('commission_type_list', '单人半身,色稿大头,双人横插,立绘,场景插画,Q版,服设,厚涂头像').split(',') %}
                     {% set ct = ct.strip() %}
@@ -254,6 +273,43 @@
                     <input type="hidden" name="commission_type_list" id="commission-type-hidden" value="{{ all_settings.get('commission_type_list', '单人半身,色稿大头,双人横插,立绘,场景插画,Q版,服设,厚涂头像') }}">
                     <button type="button" class="btn btn-primary btn-sm" onclick="addCommissionTag()" style="white-space:nowrap;">+ 添加</button>
                 </div>
+                <!-- 类别合并 -->
+                <div style="margin-top:var(--space-md);padding-top:var(--space-md);border-top:1px solid var(--color-border);">
+                    <div style="font-size:0.85rem;font-weight:600;margin-bottom:var(--space-sm);">类别合并</div>
+                    <p style="font-size:0.78rem;color:var(--color-text-secondary);margin-bottom:var(--space-sm);">选择多个含义相近的类别，合并为统一名称（自动更新所有订单）</p>
+                    <div id="merge-checkboxes" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:var(--space-sm);"></div>
+                    <div style="display:flex;gap:var(--space-sm);align-items:center;">
+                        <input type="text" id="merge-target-name" placeholder="合并后的目标名称"
+                               style="flex:1;padding:8px 12px;border:1px solid var(--color-border);border-radius:var(--radius-sm);font-size:0.88rem;">
+                        <button type="button" class="btn btn-sm" style="white-space:nowrap;background:var(--color-warning);color:#fff;border:none;" onclick="doMergeCommission()">合并</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <!-- Spec12 阶段流程管理 -->
+        <div class="card" style="margin-bottom:var(--space-md);" id="stage-flows-card">
+            <div class="card-header has-tip">阶段流程管理<span class="tip-trigger">?<span class="header-tip">为订单定义阶段流程：每条流程包含「待开始 → 中间阶段 → 完成」。新建订单时可选择流程，也可单独微调。修改仅影响之后创建的订单，已有订单的流程快照不会变动。</span></span></div>
+            <div class="card-body">
+                <!-- 流程按钮导航栏 -->
+                <div id="stage-flows-nav" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:var(--space-md);"></div>
+                <!-- 单卡编辑区 -->
+                <div id="stage-flows-editor"></div>
+                <div style="display:flex;gap:var(--space-sm);margin-top:var(--space-md);">
+                    <button type="button" class="btn btn-primary btn-sm" onclick="saveStageFlows()" style="white-space:nowrap;">保存流程预设</button>
+                </div>
+            </div>
+        </div>
+        <!-- P20d：时薪统计开关 -->
+        <div class="card" style="margin-bottom:var(--space-md);">
+            <div class="card-header has-tip">时薪统计<span class="tip-trigger">?<span class="header-tip">关闭仅隐藏工时/时薪相关显示（表单字段、徽章、完成补录弹窗、收入页时薪板块），已录入的数据不会删除。</span></span></div>
+            <div class="card-body">
+                {# checkbox 在前 + hidden 在后：勾选取首值 '1'，未勾选取唯一值 '0'（后端 flat dict 取第一个） #}
+                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+                    <input type="checkbox" name="hourly_rate_enabled" value="1" style="width:auto;"
+                           {% if all_settings.get('hourly_rate_enabled', '1') == '1' %}checked{% endif %}>
+                    <span>启用时薪统计</span>
+                </label>
+                <input type="hidden" name="hourly_rate_enabled" value="0">
             </div>
         </div>
     </div>
@@ -289,9 +345,8 @@
         </div>
         <!-- P18-F4.3：快捷键（功能固定，按键可自定义） -->
         <div class="card" style="margin-bottom:var(--space-md);">
-            <div class="card-header">快捷键</div>
+            <div class="card-header has-tip">快捷键<span class="tip-trigger">?<span class="header-tip">功能固定，按键可自定义。组合键写法如 Ctrl+N、Escape；导航类支持 g 前缀（先按 g 再按目标键，如 g h）。修改后点击右上角「保存全部」生效。</span></span></div>
             <div class="card-body">
-                <p style="font-size:0.85rem;color:var(--color-text-secondary);margin-bottom:var(--space-md);">功能固定，按键可自定义。组合键写法如 <code>Ctrl+N</code>、<code>Escape</code>；导航类支持 <code>g</code> 前缀（先按 g 再按目标键，如 <code>g h</code>）。修改后点击右上角「保存全部」生效。</p>
                 <div style="display:flex;flex-direction:column;gap:8px;">
                     {% for key, label in SHORTCUT_LABELS.items() %}
                     <div style="display:flex;align-items:center;justify-content:space-between;gap:var(--space-md);padding:8px 12px;background:var(--color-bg);border-radius:var(--radius-sm);">
@@ -309,10 +364,18 @@
 
 <!-- ═══════════ Tab: 系统 ═══════════ -->
 <div id="panel-system" style="display:none;">
-    <div class="card" style="margin-bottom:var(--space-md);">
-        <div class="card-header">重启应用</div>
+    {% if data_recovery_needed %}
+    <div class="card" style="margin-bottom:var(--space-md);border:1px solid var(--color-danger);">
+        <div class="card-header" style="color:var(--color-danger);">⚠ 数据恢复建议</div>
         <div class="card-body">
-            <p style="font-size:0.85rem;color:var(--color-text-secondary);margin-bottom:var(--space-sm);">在启动器窗口中点击「🔄 重启服务」按钮即可重启。</p>
+            <p style="font-size:0.85rem;margin:0 0 var(--space-sm);">检测到数据库为空，但存在历史备份。如果您之前使用过本工具，数据可能因程序目录变更而丢失，建议立即从备份恢复。</p>
+            <button class="btn btn-danger btn-sm" onclick="document.getElementById('backup-card').scrollIntoView({behavior:'smooth'})">查看备份</button>
+        </div>
+    </div>
+    {% endif %}
+    <div class="card" style="margin-bottom:var(--space-md);">
+        <div class="card-header has-tip">重启应用<span class="tip-trigger">?<span class="header-tip">在启动器窗口中点击「重启服务」按钮即可重启。</span></span></div>
+        <div class="card-body">
             <div style="display:flex;align-items:center;gap:var(--space-sm);padding:10px 14px;background:var(--color-bg);border-radius:var(--radius-sm);">
                 <div style="flex:1;">
                     <div style="font-weight:600;font-size:0.88rem;">打开程序目录</div>
@@ -322,29 +385,33 @@
             </div>
         </div>
     </div>
+    <!-- P22b 数据备份与恢复 -->
+    <div class="card" id="backup-card" style="margin-bottom:var(--space-md);">
+        <div class="card-header">数据备份与恢复<span style="font-size:0.75rem;color:var(--color-text-tertiary);font-weight:normal;margin-left:auto;">共 {{ backup_count }} 份备份</span></div>
+        <div class="card-body">
+            <div style="font-size:0.78rem;color:var(--color-text-tertiary);margin-bottom:var(--space-sm);user-select:all;font-family:monospace;word-break:break-all;">{{ db_path }}</div>
+            <!-- 备份位置设置 -->
+            <div style="margin-bottom:var(--space-sm);padding:var(--space-sm);background:var(--color-bg);border-radius:var(--radius-sm);">
+                <label style="font-size:0.82rem;font-weight:600;display:block;margin-bottom:4px;">备份位置</label>
+                <div style="display:flex;gap:6px;align-items:center;">
+                    <input type="text" id="backup-dir-input" value="{{ backup_dir }}" placeholder="{{ default_backup_dir }}" style="flex:1;font-size:0.78rem;font-family:monospace;padding:4px 8px;border:1px solid var(--color-border);border-radius:var(--radius-sm);background:var(--color-surface);color:var(--color-text);">
+                    <button class="btn btn-secondary btn-sm" onclick="saveBackupDir()" style="white-space:nowrap;">保存路径</button>
+                </div>
+                <div style="font-size:0.72rem;color:var(--color-text-tertiary);margin-top:3px;">留空恢复默认位置；路径必须存在且可写</div>
+            </div>
+            <div style="margin-bottom:var(--space-sm);">
+                <button class="btn btn-secondary btn-sm" onclick="createBackup()">立即备份</button>
+            </div>
+            <div id="backup-list" style="font-size:0.85rem;">
+                <div style="color:var(--color-text-tertiary);padding:var(--space-sm);">加载中…</div>
+            </div>
+        </div>
+    </div>
     <div class="card" style="margin-bottom:var(--space-md);">
         <div class="card-header">前端错误日志<button class="btn btn-ghost btn-sm" onclick="clearErrorLogs()" style="font-size:0.75rem;margin-left:auto;">清空日志</button></div>
         <div class="card-body" style="padding:0;">
             <div id="error-log-viewer" style="max-height:400px;overflow-y:auto;"></div>
             <div id="error-log-empty" class="empty-state" style="padding:var(--space-lg);"><div class="empty-state-text">暂无错误记录</div></div>
-        </div>
-    </div>
-    <div class="card" style="margin-bottom:var(--space-md);">
-        <div class="card-header">缓存清理</div>
-        <div class="card-body">
-            <div style="display:flex;flex-direction:column;gap:var(--space-sm);">
-                <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;background:var(--color-bg);border-radius:var(--radius-sm);">
-                    <div><div style="font-weight:500;font-size:0.88rem;">本地存储</div><div style="font-size:0.75rem;color:var(--color-text-tertiary);">统计范围偏好、错误日志等</div></div>
-                    <button class="btn btn-secondary btn-sm" onclick="clearLocalStorage()">清除</button>
-                </div>
-                <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;background:var(--color-bg);border-radius:var(--radius-sm);">
-                    <div><div style="font-weight:500;font-size:0.88rem;">会话存储</div><div style="font-size:0.75rem;color:var(--color-text-tertiary);">当前会话临时数据</div></div>
-                    <button class="btn btn-secondary btn-sm" onclick="clearSessionStorage()">清除</button>
-                </div>
-            </div>
-            <div style="margin-top:var(--space-sm);">
-                <button class="btn btn-sm btn-danger" onclick="clearAllStorage()">清除全部本地存储</button>
-            </div>
         </div>
     </div>
     <!-- #41 关于与更新 -->
@@ -406,6 +473,144 @@
 {% endblock %}
 
 {% block scripts %}
+<style>
+/* 阶段流程拖拽排序样式 */
+.stage-drag-handle {
+    cursor: grab; color: var(--color-text-tertiary); padding: 4px;
+    user-select: none; font-size: 1.1rem; line-height: 1; min-width: 20px; text-align: center;
+}
+.stage-drag-handle:active { cursor: grabbing; }
+.stage-flow-ghost { opacity: 0.3; background: var(--color-bg); }
+.stage-progress-bar {
+    width: 48px; height: 6px; border-radius: 3px;
+    background: var(--color-border); overflow: hidden; flex-shrink: 0;
+}
+.stage-progress-fill {
+    height: 100%; border-radius: 3px; transition: width 0.2s;
+}
+.stage-flow-row.is-anchor .stage-drag-handle-placeholder {
+    min-width: 20px; display: inline-block;
+}
+/* card-header 悬浮提示 */
+.card-header.has-tip {
+    justify-content: flex-start;
+    gap: 0;
+}
+.tip-trigger {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 16px; height: 16px; border-radius: 50%;
+    background: var(--color-border); color: var(--color-text-secondary);
+    font-size: 0.7rem; font-weight: 600;
+    margin-left: 8px; flex-shrink: 0;
+    cursor: help; line-height: 1;
+    letter-spacing: 0;
+    transition: background 0.15s, color 0.15s;
+}
+.tip-trigger:hover {
+    background: var(--color-text-secondary); color: var(--color-surface);
+}
+.header-tip { display: none; }
+/* 内联悬浮提示（非 card-header 场景） */
+.inline-tip-wrap { display: inline-block; margin-bottom: var(--space-sm); }
+.inline-tip {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 16px; height: 16px; border-radius: 50%;
+    background: var(--color-border); color: var(--color-text-secondary);
+    font-size: 0.7rem; font-weight: 600; cursor: help;
+    vertical-align: middle;
+    transition: background 0.15s, color 0.15s;
+}
+.inline-tip:hover {
+    background: var(--color-text-secondary); color: var(--color-surface);
+}
+.inline-tip-text { display: none; }
+/* 全局 portal tooltip（JS 渲染到 body，脱离 overflow:hidden 裁切） */
+.portal-tooltip {
+    position: fixed;
+    z-index: 99999;
+    padding: 10px 14px;
+    background: var(--color-text);
+    color: var(--color-bg);
+    font-size: 0.8rem;
+    font-weight: 400;
+    line-height: 1.5;
+    border-radius: var(--radius-sm);
+    white-space: normal;
+    text-transform: none;
+    letter-spacing: 0;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.22);
+    pointer-events: none;
+    opacity: 0;
+    transform: translateY(4px);
+    transition: opacity 0.18s ease, transform 0.18s ease;
+}
+.portal-tooltip.show {
+    opacity: 1;
+    transform: translateY(0);
+}
+.portal-tooltip.arrow-up::before {
+    content: ''; position: absolute; top: -5px; left: 50%;
+    transform: translateX(-50%) rotate(45deg);
+    width: 10px; height: 10px;
+    background: var(--color-text);
+    border-radius: 2px;
+}
+.portal-tooltip.arrow-down::after {
+    content: ''; position: absolute; bottom: -5px; left: 50%;
+    transform: translateX(-50%) rotate(45deg);
+    width: 10px; height: 10px;
+    background: var(--color-text);
+    border-radius: 2px;
+}
+/* ── 配色预设卡片 ── */
+.palette-preset-card {
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-xs);
+    overflow: hidden;
+    transition: border-color 0.2s, box-shadow 0.2s, transform 0.15s;
+}
+.palette-preset-card:hover {
+    border-color: var(--color-border-strong);
+    box-shadow: var(--shadow-sm);
+    transform: translateY(-1px);
+}
+.palette-preview-bar {
+    display: flex;
+    height: 32px;
+}
+.palette-card-body {
+    display: flex; align-items: center; gap: 6px;
+    padding: 10px 12px 0;
+}
+.palette-card-name {
+    font-weight: 600; font-size: 0.88rem;
+    word-break: break-all; flex: 1;
+}
+.palette-active-badge {
+    font-size: 0.68rem; font-weight: 600;
+    color: var(--color-accent);
+    background: color-mix(in srgb, var(--color-accent) 10%, var(--color-surface));
+    padding: 2px 7px; border-radius: 99px;
+    flex-shrink: 0;
+}
+.palette-card-footer {
+    display: flex; gap: 4px;
+    padding: 10px 12px;
+    margin-top: 8px;
+    border-top: 1px solid color-mix(in srgb, var(--color-border) 50%, transparent);
+}
+/* 使用中状态：卡片边框变色 + 光环高亮 */
+.palette-preset-card:has(.palette-active-badge) {
+    border-color: var(--color-accent);
+    box-shadow: 0 0 0 1px var(--color-accent), var(--shadow-xs);
+}
+.palette-preset-card:has(.palette-active-badge):hover {
+    border-color: var(--color-accent);
+    box-shadow: 0 0 0 1px var(--color-accent), var(--shadow-sm);
+}
+</style>
 <script>
 // R3 意见反馈弹窗开合与复制
  function openFeedbackModal() {
@@ -663,10 +868,299 @@ function updateCommissionHidden() {
     var tags = document.querySelectorAll('#commission-type-tags .commission-tag');
     var names = []; tags.forEach(function(t) { names.push(t.textContent.replace('×','').trim()); });
     document.getElementById('commission-type-hidden').value = names.join(',');
+    renderMergeCheckboxes(names);
 }
+// 类别合并
+function renderMergeCheckboxes(names) {
+    var box = document.getElementById('merge-checkboxes');
+    if (!box) return;
+    box.innerHTML = '';
+    (names || []).forEach(function(n) {
+        if (!n) return;
+        var lbl = document.createElement('label');
+        lbl.style.cssText = 'display:inline-flex;align-items:center;gap:4px;font-size:0.82rem;padding:4px 8px;border:1px solid var(--color-border);border-radius:var(--radius-sm);cursor:pointer;';
+        lbl.innerHTML = '<input type="checkbox" class="merge-ct-cb" value="' + escHtml(n) + '"> ' + escHtml(n);
+        box.appendChild(lbl);
+    });
+}
+function doMergeCommission() {
+    var cbs = document.querySelectorAll('.merge-ct-cb:checked');
+    var oldNames = []; cbs.forEach(function(cb) { oldNames.push(cb.value); });
+    var newName = (document.getElementById('merge-target-name').value || '').trim();
+    if (oldNames.length < 2) { showToast('请至少勾选 2 个类别', 'warning'); return; }
+    if (!newName) { showToast('请输入合并后的目标名称', 'warning'); return; }
+    if (!confirm('确定将「' + oldNames.join('、') + '」合并为「' + newName + '」？\n此操作将更新所有相关订单，不可撤销。')) return;
+    fetch('/settings/commission-merge', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({old_names: oldNames, new_name: newName})
+    }).then(function(r) { return r.json(); }).then(function(d) {
+        if (d.success) {
+            showToast(d.message, 'success');
+            setTimeout(function() { location.reload(); }, 800);
+        } else {
+            showToast('合并失败: ' + (d.error || '未知错误'), 'error');
+        }
+    }).catch(function() { showToast('网络错误', 'error'); });
+}
+// 初始化合并复选框
+document.addEventListener('DOMContentLoaded', function() {
+    var tags = document.querySelectorAll('#commission-type-tags .commission-tag');
+    var names = []; tags.forEach(function(t) { names.push(t.textContent.replace('×','').trim()); });
+    renderMergeCheckboxes(names);
+});
 
 // 来源管理
 function toggleFeeInput(cb) { cb.closest('.source-item').querySelector('.fee-input').style.display = cb.checked ? '' : 'none'; }
+
+// Spec12 阶段流程管理（按钮导航 + 单卡编辑）
+var _stageFlows = {{ STAGE_FLOWS | tojson }};
+var _activeFlowIdx = 0;
+var _stageFlowStageCounter = 0;
+
+function renderStageFlows() {
+    var nav = document.getElementById('stage-flows-nav');
+    var host = document.getElementById('stage-flows-editor');
+    if (!nav || !host) return;
+    // Clamp active index
+    if (_activeFlowIdx >= _stageFlows.length) _activeFlowIdx = 0;
+    if (_activeFlowIdx < 0) _activeFlowIdx = 0;
+    // Render nav buttons
+    nav.innerHTML = '';
+    _stageFlows.forEach(function(f, fi) {
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        btn.textContent = f.name || ('流程 ' + (fi + 1));
+        btn.style.cssText = 'padding:6px 14px;border-radius:var(--radius-sm);font-size:0.85rem;font-weight:' +
+            (fi === _activeFlowIdx ? '600' : '500') + ';cursor:pointer;transition:all 0.15s;' +
+            (fi === _activeFlowIdx
+                ? 'background:var(--color-text);color:#fff;border:1px solid var(--color-text);'
+                : 'background:var(--color-surface);color:var(--color-text);border:1px solid var(--color-border);');
+        btn.addEventListener('click', function() { selectFlow(fi); });
+        nav.appendChild(btn);
+    });
+    // "+" new flow button
+    var addBtn = document.createElement('button');
+    addBtn.type = 'button';
+    addBtn.textContent = '+';
+    addBtn.title = '新增流程';
+    addBtn.style.cssText = 'padding:6px 12px;border-radius:var(--radius-sm);font-size:0.9rem;font-weight:600;cursor:pointer;' +
+        'background:transparent;color:var(--color-text-secondary);border:1px dashed var(--color-border);transition:all 0.15s;';
+    addBtn.addEventListener('click', function() { addStageFlow(); });
+    nav.appendChild(addBtn);
+    // Render single card for active flow
+    host.innerHTML = '';
+    if (_stageFlows.length > 0) {
+        host.appendChild(buildStageFlowCard(_stageFlows[_activeFlowIdx], _activeFlowIdx));
+    } else {
+        host.innerHTML = '<p style="color:var(--color-text-tertiary);font-size:0.82rem;">暂无流程，请点击上方「+」新增。</p>';
+    }
+}
+
+function selectFlow(idx) {
+    // Save current card data before switching
+    _saveActiveCardToModel();
+    _activeFlowIdx = idx;
+    renderStageFlows();
+}
+
+function _saveActiveCardToModel() {
+    var card = document.querySelector('#stage-flows-editor .stage-flow-card');
+    if (!card || _activeFlowIdx < 0 || _activeFlowIdx >= _stageFlows.length) return;
+    var nameInp = card.querySelector('.stage-flow-name');
+    if (nameInp) _stageFlows[_activeFlowIdx].name = nameInp.value.trim();
+    var stages = [];
+    card.querySelectorAll('.stage-flow-row').forEach(function(r) {
+        stages.push({
+            name: r.querySelector('.stage-name').value.trim(),
+            progress: parseInt(r.querySelector('.stage-progress').value, 10) || 0
+        });
+    });
+    _stageFlows[_activeFlowIdx].stages = stages;
+}
+
+function buildStageFlowCard(flow, fi) {
+    var card = document.createElement('div');
+    card.className = 'stage-flow-card';
+    card.style.cssText = 'border:1px solid var(--color-border);border-radius:var(--radius-sm);padding:var(--space-md);background:var(--color-surface);';
+    var header = document.createElement('div');
+    header.style.cssText = 'display:flex;gap:var(--space-sm);align-items:center;margin-bottom:var(--space-sm);';
+    header.innerHTML =
+        '<input type="text" class="stage-flow-name" value="' + escHtml(flow.name || '') + '" placeholder="流程名称" ' +
+        'style="flex:1;padding:6px 10px;border:1px solid var(--color-border);border-radius:var(--radius-sm);font-size:0.88rem;">' +
+        '<button type="button" class="btn btn-sm" onclick="removeStageFlowCard(this)" title="删除整条流程" ' +
+        (_stageFlows.length <= 1 ? 'disabled style="opacity:0.3;cursor:not-allowed;"' : '') + '>删除</button>';
+    card.appendChild(header);
+    var stageList = document.createElement('div');
+    stageList.className = 'stage-flow-stages';
+    stageList.style.cssText = 'display:flex;flex-direction:column;gap:6px;';
+    (flow.stages || []).forEach(function(s) { stageList.appendChild(buildStageRow(s)); });
+    card.appendChild(stageList);
+    var footer = document.createElement('div');
+    footer.style.cssText = 'margin-top:var(--space-sm);display:flex;gap:var(--space-sm);';
+    footer.innerHTML = '<button type="button" class="btn btn-sm" onclick="addStageRow(this)">+ 中间阶段</button>';
+    card.appendChild(footer);
+    // 初始化 SortableJS 拖拽排序
+    Sortable.create(stageList, {
+        handle: '.stage-drag-handle',
+        filter: '.is-anchor',
+        animation: 150,
+        ghostClass: 'stage-flow-ghost',
+        onEnd: function() {
+            _saveActiveCardToModel();
+            _redistributeProgress(_activeFlowIdx);
+            renderStageFlows();
+        }
+    });
+    return card;
+}
+function buildStageRow(stage) {
+    var isAnchor = (stage.name === '待开始' || stage.name === '完成');
+    var row = document.createElement('div');
+    row.className = 'stage-flow-row' + (isAnchor ? ' is-anchor' : '');
+    row.style.cssText = 'display:flex;gap:var(--space-sm);align-items:center;';
+    // 拖拽手柄 / 锚点占位
+    var handle = document.createElement('span');
+    if (isAnchor) {
+        handle.className = 'stage-drag-handle-placeholder';
+        handle.style.cssText = 'min-width:20px;display:inline-block;';
+    } else {
+        handle.className = 'stage-drag-handle';
+        handle.textContent = '≡';
+    }
+    row.appendChild(handle);
+    // 名称输入
+    var nameInp = document.createElement('input');
+    nameInp.type = 'text'; nameInp.className = 'stage-name';
+    nameInp.value = stage.name || ''; nameInp.placeholder = '阶段名称';
+    nameInp.style.cssText = 'flex:1;padding:6px 10px;border:1px solid var(--color-border);border-radius:var(--radius-sm);font-size:0.88rem;';
+    if (isAnchor) { nameInp.readOnly = true; nameInp.style.background = 'var(--color-bg)'; nameInp.style.color = 'var(--color-text-secondary)'; }
+    row.appendChild(nameInp);
+    // 百分比输入
+    var progInp = document.createElement('input');
+    progInp.type = 'number'; progInp.className = 'stage-progress';
+    progInp.value = stage.progress != null ? stage.progress : '';
+    progInp.min = 0; progInp.max = 100; progInp.step = 1;
+    progInp.style.cssText = 'width:60px;padding:6px 10px;border:1px solid var(--color-border);border-radius:var(--radius-sm);font-size:0.88rem;text-align:right;';
+    if (isAnchor) { progInp.readOnly = true; progInp.style.background = 'var(--color-bg)'; progInp.style.color = 'var(--color-text-secondary)'; }
+    row.appendChild(progInp);
+    var unitSpan = document.createElement('span');
+    unitSpan.textContent = '%'; unitSpan.style.cssText = 'font-size:0.82rem;color:var(--color-text-secondary);min-width:14px;';
+    row.appendChild(unitSpan);
+    // 迷你进度条
+    var bar = document.createElement('div');
+    bar.className = 'stage-progress-bar';
+    var fill = document.createElement('div');
+    fill.className = 'stage-progress-fill';
+    var pct = Math.max(0, Math.min(100, stage.progress || 0));
+    fill.style.width = pct + '%';
+    fill.style.background = isAnchor ? 'var(--color-success)' : 'var(--color-link)';
+    bar.appendChild(fill);
+    row.appendChild(bar);
+    // 删除按钮
+    var rmBtn = document.createElement('button');
+    rmBtn.type = 'button'; rmBtn.textContent = '×'; rmBtn.title = '删除';
+    rmBtn.style.cssText = 'padding:4px 10px;border:1px solid var(--color-border);background:transparent;border-radius:var(--radius-sm);cursor:pointer;';
+    if (isAnchor) { rmBtn.disabled = true; rmBtn.style.opacity = '0.3'; rmBtn.style.cursor = 'not-allowed'; }
+    rmBtn.addEventListener('click', function() {
+        if (isAnchor) return;
+        row.remove();
+        _saveActiveCardToModel();
+        _redistributeProgress(_activeFlowIdx);
+        renderStageFlows();
+    });
+    row.appendChild(rmBtn);
+    return row;
+}
+function addStageFlow() {
+    _saveActiveCardToModel();
+    _stageFlows.push({
+        name: '新流程',
+        stages: [
+            {name: '待开始', progress: 0},
+            {name: '完成', progress: 100}
+        ]
+    });
+    _activeFlowIdx = _stageFlows.length - 1;
+    renderStageFlows();
+}
+function removeStageFlowCard(btn) {
+    if (_stageFlows.length <= 1) { showToast('至少保留一条流程', 'error'); return; }
+    _saveActiveCardToModel();
+    _stageFlows.splice(_activeFlowIdx, 1);
+    if (_activeFlowIdx >= _stageFlows.length) _activeFlowIdx = _stageFlows.length - 1;
+    renderStageFlows();
+}
+function addStageRow(btn) {
+    _saveActiveCardToModel();
+    // 在「完成」锚点之前插入新阶段
+    var stages = _stageFlows[_activeFlowIdx].stages;
+    stages.splice(stages.length - 1, 0, {name: '', progress: 50});
+    _redistributeProgress(_activeFlowIdx);
+    renderStageFlows();
+}
+function _redistributeProgress(idx) {
+    var stages = _stageFlows[idx].stages;
+    var n = stages.length;
+    if (n <= 1) return;
+    for (var i = 0; i < n; i++) {
+        stages[i].progress = Math.round(i * 100 / (n - 1));
+    }
+    stages[0].progress = 0;
+    stages[n - 1].progress = 100;
+}
+function _collectStageFlows() {
+    // Save current visible card to model first
+    _saveActiveCardToModel();
+    // Validate all flows from model
+    for (var i = 0; i < _stageFlows.length; i++) {
+        var flow = _stageFlows[i];
+        if (!flow.name) { showToast('流程名称不能为空', 'error'); _activeFlowIdx = i; renderStageFlows(); return null; }
+        var nameSet = {};
+        for (var j = 0; j < flow.stages.length; j++) {
+            var s = flow.stages[j];
+            if (!s.name) { showToast('流程「' + flow.name + '」阶段名称不能为空', 'error'); _activeFlowIdx = i; renderStageFlows(); return null; }
+            if (nameSet[s.name]) { showToast('流程「' + flow.name + '」存在重复阶段「' + s.name + '」', 'error'); _activeFlowIdx = i; renderStageFlows(); return null; }
+            nameSet[s.name] = true;
+            if (isNaN(s.progress) || s.progress < 0 || s.progress > 100) { showToast('流程「' + flow.name + '」进度需为 0-100 的整数', 'error'); _activeFlowIdx = i; renderStageFlows(); return null; }
+        }
+        for (var k = 1; k < flow.stages.length; k++) {
+            if (flow.stages[k].progress <= flow.stages[k-1].progress) {
+                showToast('流程「' + flow.name + '」阶段进度需严格递增', 'error'); _activeFlowIdx = i; renderStageFlows(); return null;
+            }
+        }
+        if (flow.stages[0].name !== '待开始' || flow.stages[0].progress !== 0 ||
+            flow.stages[flow.stages.length-1].name !== '完成' || flow.stages[flow.stages.length-1].progress !== 100) {
+            showToast('流程「' + flow.name + '」首尾锚点不可改名/改值', 'error'); _activeFlowIdx = i; renderStageFlows(); return null;
+        }
+    }
+    return _stageFlows;
+}
+function saveStageFlows() {
+    var flows = _collectStageFlows();
+    if (!flows) return;
+    fetch('/settings/stage-flows', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(flows)
+    }).then(function(r) {
+        return r.json().then(function(d) { return {ok: r.ok, data: d}; });
+    }).then(function(res) {
+        if (!res.ok) {
+            showToast(res.data.error || '保存失败', 'error');
+            return;
+        }
+        _stageFlows = flows;
+        showToast('已保存 ' + flows.length + ' 条流程预设，刷新以同步着色面板', 'success');
+        // 刷新页面以重建着色面板（自定义阶段增删需同步 cal_stage_* 输入项）
+        setTimeout(function() { window.location.reload(); }, 600);
+    }).catch(function(err) {
+        showToast('网络错误: ' + err.message, 'error');
+    });
+}
+document.addEventListener('DOMContentLoaded', function() {
+    if (document.getElementById('stage-flows-editor')) renderStageFlows();
+});
 function addSource() {
     var input = document.getElementById('new-source-name');
     var name = input.value.trim(); if (!name) return;
@@ -750,6 +1244,82 @@ function toggleCssTheme() {
         var hidden = document.getElementById('shortcuts-json-input');
         if (hidden) hidden.value = JSON.stringify(out);
     });
+})();
+</script>
+<script>
+// Portal Tooltip — 渲染到 body，脱离 overflow:hidden 裁切
+(function() {
+    var tipEl = null, showTimer = null;
+
+    function getTip() {
+        if (!tipEl) {
+            tipEl = document.createElement('div');
+            tipEl.className = 'portal-tooltip';
+            document.body.appendChild(tipEl);
+        }
+        return tipEl;
+    }
+
+    function hideTip() {
+        clearTimeout(showTimer);
+        if (tipEl) tipEl.classList.remove('show');
+    }
+
+    function positionTip(trigger, text) {
+        var tip = getTip();
+        tip.textContent = text;
+        tip.className = 'portal-tooltip';
+        tip.style.left = '0px';
+        tip.style.top = '0px';
+        tip.style.opacity = '0';
+        tip.style.maxWidth = '';
+
+        var gap = 10;
+        var rect = trigger.getBoundingClientRect();
+        var cx = rect.left + rect.width / 2;
+        var spaceBelow = window.innerHeight - rect.bottom;
+        var spaceAbove = rect.top;
+
+        // 估算高度
+        tip.style.maxWidth = '360px';
+        var estH = tip.offsetHeight || 50;
+
+        var placeBelow = spaceBelow > estH + gap + 8 || spaceBelow > spaceAbove;
+
+        if (placeBelow) {
+            tip.style.top = (rect.bottom + gap) + 'px';
+            tip.classList.add('arrow-up');
+        } else {
+            tip.style.top = (rect.top - estH - gap) + 'px';
+            tip.classList.add('arrow-down');
+        }
+
+        // 水平居中，限制不超出视口
+        var maxW = 360;
+        var minLeft = 12;
+        var maxLeft = window.innerWidth - maxW - 12;
+        var left = Math.max(minLeft, Math.min(maxLeft, cx - maxW / 2));
+        tip.style.left = left + 'px';
+        tip.style.maxWidth = maxW + 'px';
+        tip.style.opacity = '';
+    }
+
+    function bind(trigger) {
+        trigger.addEventListener('mouseenter', function() {
+            clearTimeout(showTimer);
+            var inner = trigger.querySelector('.header-tip') || trigger.querySelector('.inline-tip-text');
+            if (!inner) return;
+            var text = inner.textContent || inner.innerText;
+            showTimer = setTimeout(function() {
+                positionTip(trigger, text);
+                var tip = getTip();
+                requestAnimationFrame(function() { tip.classList.add('show'); });
+            }, 220);
+        });
+        trigger.addEventListener('mouseleave', hideTip);
+    }
+
+    document.querySelectorAll('.tip-trigger, .inline-tip').forEach(bind);
 })();
 </script>
 {% endblock %}

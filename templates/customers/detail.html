@@ -58,6 +58,21 @@
                 <div class="detail-label">购买次数</div>
                 <div class="detail-value">{{ customer.purchase_count }}</div>
             </div>
+            {% if hourly_rate_enabled %}
+            {# P20c：加权平均时薪 = SUM(实收)/SUM(实际工时)，口径同 spec12 §3 #}
+            {% set ns = namespace(amt=0.0, hrs=0.0) %}
+            {% for o in orders if o.current_stage == '完成' and o.work_hours and o.work_hours > 0 and not o.exclude_hourly %}
+            {% set ns.amt = ns.amt + (o.actual_received or 0) %}
+            {% set ns.hrs = ns.hrs + o.work_hours %}
+            {% endfor %}
+            <div class="detail-item">
+                <div class="detail-label">平均时薪</div>
+                <div class="detail-value" style="color:var(--color-info);">
+                    {% if ns.hrs > 0 %}¥{{ "%.0f"|format(ns.amt / ns.hrs) }}/h{% else %}—{% endif %}
+                </div>
+                <div style="font-size:0.72rem;color:var(--color-text-tertiary);margin-top:2px;">仅统计已完成且填写工时的订单</div>
+            </div>
+            {% endif %}
         </div>
     </div>
 </div>
@@ -72,6 +87,7 @@
     </div>
     <div class="card-body" style="padding:0;">
         {% if orders %}
+        {% import "partials/_macros.html" as m %}
         <table>
             <thead>
                 <tr>
@@ -81,6 +97,7 @@
                     <th>日期</th>
                     <th>收入</th>
                     <th>实收</th>
+                    {% if hourly_rate_enabled %}<th>时薪</th>{% endif %}
                     <th>状态</th>
                 </tr>
             </thead>
@@ -97,6 +114,7 @@
                     <td>{{ o.scheduled_start or '-' }}</td>
                     <td><span class="amount">¥{{ "%.2f"|format(o.income) }}</span></td>
                     <td><span class="amount positive">¥{{ "%.2f"|format(o.actual_received) }}</span></td>
+                    {% if hourly_rate_enabled %}<td>{{ m.hourly_badge(o) }}</td>{% endif %}
                     <td>{{ o.payment_status }}</td>
                 </tr>
                 {% endfor %}

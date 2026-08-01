@@ -1,27 +1,24 @@
-{# 看板卡片 — 悬浮操作 + 颜色标识 #}
-{% set stage_border = {
-    '待开始': '#d9d9d8',
-    '色稿': '#6b8eb8',
-    '线稿': '#5b9e9e',
-    '细化': '#c49b4a',
-    '收尾': '#8b7ec8',
-    '完成': '#5b9e6b',
-    '退单': '#c4756b'
-} %}
-{% set stage_order = ['待开始', '色稿', '线稿', '细化', '收尾', '完成', '退单'] %}
-{% set cur_idx = stage_order.index(order.current_stage) if order.current_stage in stage_order else 0 %}
-{% set prev_stage = stage_order[cur_idx - 1] if cur_idx > 0 else None %}
-{% set next_stage = stage_order[cur_idx + 1] if cur_idx < stage_order|length - 1 else None %}
+{# 看板卡片 — Spec12：用快照阶段替代硬编码 stage_order/stage_border #}
+{% set flow_stages = order.get('_stage_flow_parsed') or [] %}
+{# 从快照中找当前索引，计算 prev/next #}
+{% set ns = namespace(cur_idx=-1) %}
+{% for s in flow_stages %}
+    {% if s.name == order.current_stage and ns.cur_idx == -1 %}{% set ns.cur_idx = loop.index0 %}{% endif %}
+{% endfor %}
+{% set cur_idx = ns.cur_idx %}
+{% set prev_stage = flow_stages[cur_idx - 1].name if cur_idx > 0 else None %}
+{% set next_stage = flow_stages[cur_idx + 1].name if cur_idx >= 0 and cur_idx < flow_stages|length - 1 else None %}
 {% set card_class = '' %}
 {% if order.ddl_status == '🔴逾期' %}{% set card_class = 'overdue' %}
 {% elif order.ddl_status == '即将到期' %}{% set card_class = 'due-soon' %}
 {% endif %}
+{% set stage_slug = order.current_stage|stage_class %}
 <div class="kanban-card {{ card_class }}"
      data-order-id="{{ order.id }}"
      data-income="{{ order.income }}"
      data-commercial="{{ 1 if order.is_commercial else 0 }}"
      data-overdue="{{ 1 if (order.is_overdue or order.ddl_status == '🔴逾期') else 0 }}"
-     style="border-left-color: {{ stage_border.get(order.current_stage, '#d9d9d8') }};"
+     style="border-left-color: var(--stage-{{ stage_slug }}, var(--color-border-strong));"
      onclick="event.stopPropagation(); openEditDrawer({{ order.id }});">
     <!-- 悬浮操作按钮 -->
     <div class="kanban-card-actions" onclick="event.stopPropagation();">
@@ -41,6 +38,11 @@
         <span>{{ order.customer_name or '未分配' }}</span>
         <span class="kanban-card-amount">¥{{ "%.0f"|format(order.income) }}</span>
     </div>
+    {# P20c：完成阶段角标显示时薪（防其他列噪音） #}
+    {% if hourly_rate_enabled and order.current_stage == '完成' %}
+    {% import "partials/_macros.html" as m %}
+    <div style="margin-top:4px;">{{ m.hourly_badge(order) }}</div>
+    {% endif %}
     {% if order.ddl_status == '🔴逾期' %}
     <div style="margin-top:4px;">
         <span class="status-badge overdue">逾期</span>
@@ -53,6 +55,15 @@
     {% if order.scheduled_end %}
     <div style="font-size:0.7rem;color:var(--color-text-tertiary);margin-top:3px;">
         {{ order.scheduled_end }}
+        {% if order.days_remaining is defined and order.days_remaining is not none and not order.is_archived %}
+            {% if order.days_remaining < 0 %}
+                <span style="color:var(--color-danger);font-weight:600;">逾期{{ -order.days_remaining }}天</span>
+            {% elif order.days_remaining == 0 %}
+                <span style="color:var(--color-warning);font-weight:600;">今日到期</span>
+            {% else %}
+                <span{% if order.days_remaining <= 3 %} style="color:var(--color-warning);"{% endif %}>剩余{{ order.days_remaining }}天</span>
+            {% endif %}
+        {% endif %}
     </div>
     {% endif %}
 </div>

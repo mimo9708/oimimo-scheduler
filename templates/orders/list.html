@@ -39,6 +39,12 @@
                 <option value="{{ s }}" {% if filters.get('source') == s %}selected{% endif %}>{{ s }}</option>
                 {% endfor %}
             </select>
+            <select name="commission_type">
+                <option value="">所有类别</option>
+                {% for ct in COMMISSION_TYPE_CHOICES %}
+                <option value="{{ ct }}" {% if filters.get('commission_type') == ct %}selected{% endif %}>{{ ct }}</option>
+                {% endfor %}
+            </select>
             <select name="status">
                 <option value="">所有状态</option>
                 {% for s in DDL_CHOICES %}
@@ -126,6 +132,7 @@
                         {{ sort_th('ddl', 'DDL') }}
                         {{ sort_th('income', '收入') }}
                         {{ sort_th('actual_received', '实收') }}
+                        {% if hourly_rate_enabled %}<th>时薪</th>{% endif %}
                         {{ sort_th('payment', '收款') }}
                         {{ sort_th('scheduled', '排期') }}
                     </tr>
@@ -292,7 +299,9 @@ function goPerPage(n) {
             .then(function(r) {
                 btn.textContent = '执行'; btn.disabled = false;
                 if (r.success) {
-                    showToast('已更新 ' + r.count + ' 条', 'success');
+                    var msg = '已更新 ' + r.count + ' 条';
+                    if (r.skipped) msg += '，' + r.skipped + ' 单因流程中无该阶段已跳过';
+                    showToast(msg, r.skipped ? 'warning' : 'success');
                     refreshTable();
                 } else {
                     showToast(r.error || '失败', 'error');

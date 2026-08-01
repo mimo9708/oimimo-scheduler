@@ -69,14 +69,56 @@
                         <span class="kv-val mono" style="font-weight:700;color:var(--color-success);">¥{{ "%.2f"|format(order.actual_received) }}</span>
                     </div>
                     <div class="kv-row"><span class="kv-key">收款</span><span class="kv-val">{{ order.payment_status }}</span></div>
+                    {% if hourly_rate_enabled %}
+                    {# P20c：时薪三行（口径：完成 且 work_hours>0 且未排除） #}
+                    <div class="kv-row" style="border-top:1px solid var(--color-border);padding-top:6px;margin-top:2px;">
+                        <span class="kv-key">单笔时薪</span>
+                        <span class="kv-val mono">
+                            {% if order.exclude_hourly %}
+                            <span class="status-badge" style="background:var(--color-bg);color:var(--color-text-tertiary);">已排除统计</span>
+                            {% elif order.current_stage == '完成' and order.work_hours and order.work_hours > 0 %}
+                            <span style="color:var(--color-info);font-weight:700;">¥{{ "%.0f"|format((order.actual_received or 0) / order.work_hours) }}/h</span>
+                            {% else %}
+                            — <a href="/orders/{{ order.id }}/edit" style="font-size:0.72rem;color:var(--color-info);">补录工时</a>
+                            {% endif %}
+                        </span>
+                    </div>
+                    <div class="kv-row"><span class="kv-key">工时（预估:实际）</span><span class="kv-val mono">{{ "%.1f"|format(order.estimated_hours) if order.estimated_hours else '—' }} : {{ "%.1f"|format(order.work_hours) if order.work_hours else '—' }}</span></div>
+                    <div class="kv-row"><span class="kv-key">预估偏差</span>
+                        <span class="kv-val mono">
+                            {% if order.estimated_hours and order.work_hours %}
+                            {{ "%+.1f"|format(order.work_hours - order.estimated_hours) }}h
+                            {% else %}
+                            —
+                            {% endif %}
+                        </span>
+                    </div>
+                    {% endif %}
                 </div>
                 <div class="section-label" style="margin-top:var(--space-md);">排期</div>
                 <div class="kv-grid">
                     <div class="kv-row"><span class="kv-key">页面截稿</span><span class="kv-val mono">{{ order.page_deadline.replace('T', ' ') if order.page_deadline else '-' }}</span></div>
                     <div class="kv-row"><span class="kv-key">排单开始</span><span class="kv-val mono">{{ order.scheduled_start.replace('T', ' ') if order.scheduled_start else '-' }}</span></div>
                     <div class="kv-row"><span class="kv-key">排单截止</span><span class="kv-val mono">{{ order.scheduled_end.replace('T', ' ') if order.scheduled_end else '-' }}</span></div>
+                    <div class="kv-row">
+                        <span class="kv-key">剩余天数</span>
+                        <span class="kv-val">
+                            {% if order.days_remaining is not defined or order.days_remaining is none or order.is_archived %}—
+                            {% elif order.days_remaining < 0 %}<span style="color:var(--color-danger);font-weight:600;">逾期{{ -order.days_remaining }}天</span>
+                            {% elif order.days_remaining == 0 %}<span style="color:var(--color-warning);font-weight:600;">今日到期</span>
+                            {% elif order.days_remaining <= 3 %}<span style="color:var(--color-warning);">剩余{{ order.days_remaining }}天</span>
+                            {% else %}剩余{{ order.days_remaining }}天
+                            {% endif %}
+                        </span>
+                    </div>
                 </div>
             </div>
+        </div>
+        {# Spec12：阶段进度时间轴 #}
+        {% from "partials/_stage_timeline.html" import stage_timeline %}
+        <div style="grid-column:1/-1;padding:var(--space-sm) var(--space-md);border-top:1px solid var(--color-border);">
+            <div class="section-label">阶段进度</div>
+            {{ stage_timeline(order) }}
         </div>
         {% if order.notes %}
         <div style="padding:var(--space-sm) var(--space-md);border-top:1px solid var(--color-border);background:var(--color-bg);font-size:0.85rem;color:var(--color-text-secondary);white-space:pre-wrap;border-radius:0 0 var(--radius-lg) var(--radius-lg);">{{ order.notes|render_notes|safe }}</div>

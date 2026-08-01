@@ -1472,7 +1472,8 @@ input[type="date"]::-webkit-calendar-picker-indicator:hover { opacity: 1; }
     margin-bottom: 4px;
 }
 
-.kanban-column-title { font-weight: 600; color: var(--color-text-secondary); }
+.kanban-column-title { font-weight: 600; color: var(--color-text-secondary); display: inline-flex; align-items: center; gap: 6px; }
+.kanban-stage-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; display: inline-block; }
 .kanban-column-count { font-size: 0.78rem; color: var(--color-text-tertiary); }
 .kanban-column-total { font-size: 0.72rem; color: var(--color-text-tertiary); }
 
@@ -2522,54 +2523,19 @@ input[type="date"]::-webkit-calendar-picker-indicator:hover { opacity: 1; }
 }
 
 /* ── 统计模块自定义显隐（P16h）── */
-/* 模块工具条：每个 [data-module] 容器首子元素 */
-.module-toolbar {
-    display: flex;
-    align-items: center;
-    justify-content: flex-end;   /* P17b 已移除标题，操作按钮右对齐 */
-    gap: var(--space-sm);
-    margin-bottom: var(--space-sm);
-    grid-column: 1 / -1;   /* 在 grid 容器（charts-grid/table-panels）中跨满全宽 */
-}
-.module-toolbar-title {
-    font-size: 0.8rem;
-    font-weight: 600;
-    color: var(--color-text-tertiary, #999);
-    letter-spacing: 0.02em;
-}
-.module-toolbar-actions {
-    display: inline-flex;
-    gap: 4px;
-    opacity: 0;
-    pointer-events: none;
-    transition: opacity var(--transition-fast, 0.15s);
-}
-.module-toolbar:hover .module-toolbar-actions,
-.module-toolbar-actions:hover {
-    opacity: 1;
-    pointer-events: auto;
-}
-.module-toolbar-btn {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 22px;
-    height: 22px;
-    padding: 0;
-    border: none;
-    background: transparent;
-    color: var(--color-text-tertiary, #999);
-    border-radius: var(--radius-sm, 6px);
-    cursor: pointer;
-    transition: background var(--transition-fast, 0.15s), color var(--transition-fast, 0.15s);
-}
-.module-toolbar-btn:hover { background: var(--color-bg, #f0f0f0); color: var(--color-text, #333); }
-.module-toolbar-btn [data-lucide] { width: 15px; height: 15px; }
-
-/* 最小化态：仅保留工具条，隐藏其余内容 */
-.module-minimized > *:not(.module-toolbar) { display: none !important; }
 /* 隐藏态 */
 .module-hidden { display: none !important; }
+
+/* ── P20e：仪表盘区块与时薪徽章 ── */
+.dash-block { min-width: 0; }
+.hourly-badge {
+    background: color-mix(in srgb, var(--color-info) 12%, transparent);
+    color: var(--color-info);
+}
+.hourly-badge-excluded {
+    background: var(--color-bg);
+    color: var(--color-text-tertiary);
+}
 
 /* 模块设置入口与浮层面板 */
 .module-settings-wrap { position: relative; display: inline-block; }
@@ -2604,7 +2570,6 @@ input[type="date"]::-webkit-calendar-picker-indicator:hover { opacity: 1; }
     font-size: 0.85rem;
 }
 .module-setting-main { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
-.module-setting-min { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; color: var(--color-text-tertiary, #999); font-size: 0.78rem; }
 .module-settings-foot { margin-top: var(--space-sm); padding-top: var(--space-sm); border-top: 1px solid var(--color-border, #e5e5e5); text-align: right; }
 
 /* ═══════════════════════════════════════════════════════════
@@ -2656,4 +2621,232 @@ i[data-lucide]:not([class]) { display: inline-block; width: 1em; height: 1em; ve
 @media (prefers-reduced-motion: reduce) {
     ::view-transition-old(app-sidebar),
     ::view-transition-new(app-sidebar) { animation: none; }
+}
+
+/* ═══════════════════════════════════════════════════════════
+   P21a 收入页自定义布局（gridstack，任务卡 69）
+   vendor 样式只作用于 `.grid-stack > .grid-stack-item`，容器初始
+   class 为 .dash-grid —— gridstack 未加载/初始化失败时不带
+   .layout-active，块按服务端顺序垂直排布（零感知降级）。
+   ═══════════════════════════════════════════════════════════ */
+
+/* 降级块流：未初始化时给每块补上原 charts-grid 行的垂直间距 */
+.dash-grid:not(.layout-active) > .grid-stack-item { margin-bottom: var(--space-md); }
+
+/* P16h 隐藏模块：连同 widget 外壳一起藏（网格态 JS 已 removeWidget，
+   这里兜底摘除后残留的 DOM 外壳；降级态避免留出空 margin） */
+.dash-grid > .grid-stack-item:has(.module-hidden) { display: none !important; }
+
+/* 网格态：卡片填满 widget，高度由网格行数决定（gs-h 按现状量测，零视觉回归） */
+.dash-grid.layout-active > .grid-stack-item > .grid-stack-item-content { overflow: hidden; }
+.dash-grid.layout-active .grid-stack-item-content > .dash-block {
+    height: 100%;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+}
+.dash-grid.layout-active .grid-stack-item-content > .dash-block > .card-body {
+    flex: 1;
+    min-height: 0;
+}
+
+/* 编辑态：虚线描边 + 标题栏可抓取（handle: .card-header / .stats-grid） */
+.dash-grid.layout-editing > .grid-stack-item > .grid-stack-item-content {
+    outline: 1.5px dashed var(--color-border-strong);
+    outline-offset: -1.5px;
+    border-radius: var(--radius-md);
+}
+.dash-grid.layout-editing .dash-block .card-header,
+.dash-grid.layout-editing .dash-block .stats-grid { cursor: move; }
+
+/* 拖拽中的块：抬升阴影（只读态无任何把手/描边痕迹，vendor 在
+   ui-resizable-disabled 下自动隐藏缩放把手） */
+.dash-grid .grid-stack-item.ui-draggable-dragging > .grid-stack-item-content,
+.dash-grid .grid-stack-item.ui-resizable-resizing > .grid-stack-item-content {
+    box-shadow: var(--shadow-md, 0 6px 24px rgba(0,0,0,0.12));
+}
+
+/* 拖拽占位：主题色虚线框（覆盖 vendor 的灰底） */
+.grid-stack-placeholder > .placeholder-content {
+    background: color-mix(in srgb, var(--color-accent) 8%, transparent);
+    border: 1.5px dashed var(--color-accent);
+    border-radius: var(--radius-md);
+}
+
+/* ═══════════════════════════════════════════════════════════
+   Spec12：阶段进度步进器  .stage-timeline（横向连线 + 圆圈节点 + 标签在下）
+   ═══════════════════════════════════════════════════════════ */
+.stage-timeline {
+    position: relative;
+    padding: var(--space-sm) 0;
+    margin: var(--space-sm) 0;
+}
+.stage-timeline.is-refund {
+    opacity: 0.55;
+    filter: grayscale(0.4);
+}
+.stage-timeline-refund-mark {
+    text-align: center;
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--stage-cancelled);
+    margin-bottom: 4px;
+    letter-spacing: 0.05em;
+}
+
+/* 步进器容器 */
+.stage-timeline-stepper {
+    display: flex;
+    align-items: flex-start;
+}
+
+/* 单个步骤 */
+.stage-timeline-step {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    position: relative;
+    min-width: 0;
+}
+
+/* 连线（左右各一段，absolute 定位在 dot 中线高度） */
+.stage-timeline-connector-left,
+.stage-timeline-connector-right {
+    position: absolute;
+    top: 9px; /* (dot 16px + border 2px*2) / 2 - 1px = 9px */
+    height: 2px;
+    width: calc(50% - 10px); /* 留出 dot 半径空间 */
+    background: var(--color-border);
+    transition: background var(--transition-fast, 0.15s ease);
+}
+.stage-timeline-connector-left { left: 0; }
+.stage-timeline-connector-right { right: 0; }
+
+/* 已通过/当前节点的连线变蓝 */
+.stage-timeline-step.is-past .stage-timeline-connector-left,
+.stage-timeline-step.is-past .stage-timeline-connector-right,
+.stage-timeline-step.is-current .stage-timeline-connector-left {
+    background: var(--color-link);
+}
+.stage-timeline.is-done .stage-timeline-step.is-past .stage-timeline-connector-left,
+.stage-timeline.is-done .stage-timeline-step.is-past .stage-timeline-connector-right,
+.stage-timeline.is-done .stage-timeline-step.is-current .stage-timeline-connector-left {
+    background: var(--stage-completed);
+}
+.stage-timeline.is-refund .stage-timeline-step .stage-timeline-connector-left,
+.stage-timeline.is-refund .stage-timeline-step .stage-timeline-connector-right {
+    background: var(--color-border);
+}
+
+/* 首尾隐藏外侧连线 */
+.stage-timeline-step:first-child .stage-timeline-connector-left,
+.stage-timeline-step:last-child .stage-timeline-connector-right {
+    display: none;
+}
+
+/* 圆圈节点（z-index 在连线之上） */
+.stage-timeline-dot {
+    position: relative;
+    z-index: 1;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    border: 2px solid var(--color-border-strong);
+    background: var(--color-surface);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    transition: all var(--transition-fast, 0.15s ease);
+    flex-shrink: 0;
+}
+
+/* 已通过：实心蓝 + 白勾 */
+.stage-timeline-step.is-past .stage-timeline-dot {
+    background: var(--color-link);
+    border-color: var(--color-link);
+}
+/* 当前：蓝色边框 + 光晕 */
+.stage-timeline-step.is-current .stage-timeline-dot {
+    border-color: var(--color-link);
+    background: var(--color-surface);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-link) 20%, transparent);
+}
+/* 当前节点内加一个小实心圆表示激活 */
+.stage-timeline-step.is-current .stage-timeline-dot::after {
+    content: '';
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--color-link);
+}
+/* 未来：空心灰 */
+.stage-timeline-step.is-future .stage-timeline-dot {
+    border-color: var(--color-border);
+    background: var(--color-bg);
+}
+/* 完成态整条流程变绿 */
+.stage-timeline.is-done .stage-timeline-step.is-past .stage-timeline-dot,
+.stage-timeline.is-done .stage-timeline-step.is-current .stage-timeline-dot {
+    background: var(--stage-completed);
+    border-color: var(--stage-completed);
+}
+.stage-timeline.is-done .stage-timeline-step.is-current .stage-timeline-dot::after {
+    background: #fff;
+}
+
+/* 标签 */
+.stage-timeline-label {
+    font-size: 0.72rem;
+    color: var(--color-text-tertiary);
+    text-align: center;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+    margin-top: 4px;
+}
+.stage-timeline-step.is-current .stage-timeline-label {
+    color: var(--color-text);
+    font-weight: 600;
+}
+.stage-timeline-step.is-past .stage-timeline-label {
+    color: var(--color-text-secondary);
+}
+
+/* 百分比 */
+.stage-timeline-pct {
+    font-size: 0.68rem;
+    font-weight: 700;
+    color: var(--color-link);
+    font-family: var(--font-mono);
+}
+.stage-timeline.is-done .stage-timeline-pct {
+    color: var(--stage-completed);
+}
+
+/* 紧凑模式（表单内/看板卡片） */
+.stage-timeline-compact .stage-timeline {
+    padding: 4px 0;
+    margin: 4px 0;
+}
+.stage-timeline-compact .stage-timeline-dot {
+    width: 14px;
+    height: 14px;
+}
+.stage-timeline-compact .stage-timeline-step.is-current .stage-timeline-dot::after {
+    width: 6px;
+    height: 6px;
+}
+.stage-timeline-compact .stage-timeline-connector-left,
+.stage-timeline-compact .stage-timeline-connector-right {
+    top: 7px; /* (14px + 2px*2) / 2 - 1px = 8px, 微调 7px */
+    width: calc(50% - 8px);
+}
+.stage-timeline-compact .stage-timeline-label {
+    font-size: 0.65rem;
+}
+.stage-timeline-compact .stage-timeline-pct {
+    font-size: 0.62rem;
 }

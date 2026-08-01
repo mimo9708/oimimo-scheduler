@@ -43,6 +43,13 @@ function closeCenterModal() {
     }
     // 刷新统计卡片（保留用户选择的时间范围）
     refreshStatsPreservingRange();
+    // P20d：补录工时弹窗关闭后，接续被暂存的归档确认（串行不并发）
+    window.__workHoursPromptActive = false;
+    if (window.__pendingArchiveConfirm) {
+        var _pid = window.__pendingArchiveConfirm;
+        window.__pendingArchiveConfirm = null;
+        setTimeout(function() { archiveOrder(_pid, false); }, 300);
+    }
 }
 
 // Escape 关闭
@@ -130,9 +137,17 @@ document.addEventListener('keydown', function(e) {
         var combo = eventCombo(e);
         // close/关闭浮层：即使在输入框也允许（既有各浮层 Escape 处理器仍会各自兜底）
         if (comboMap[combo] === 'close') { closeAnyOverlay(); return; }
-        // #48：保存全部（Ctrl+S）在输入框内也允许触发（设置页多为输入框聚焦态），并拦截浏览器默认保存
+        // #48：保存全部（Ctrl+S）在输入框内也允许触发（设置页/编辑订单页多为输入框聚集态），并拦截浏览器默认保存
         if (comboMap[combo] === 'save_settings') {
-            if (document.getElementById('settings-form')) { e.preventDefault(); runAction('save_settings'); }
+            if (document.getElementById('settings-form')) { e.preventDefault(); runAction('save_settings'); return; }
+            // 订单编辑表单（全页 / 模态框 / 抽屉）：Ctrl+S 提交表单
+            var orderForm = document.getElementById('order-form') || document.getElementById('order-form-modal');
+            if (!orderForm) {
+                // 抽屉可能通过 HTMX 加载，id 可能不同；兜底找 drawer 内的表单
+                var drawer = document.getElementById('drawer-body');
+                if (drawer) orderForm = drawer.querySelector('form[method="POST"]');
+            }
+            if (orderForm) { e.preventDefault(); orderForm.requestSubmit ? orderForm.requestSubmit() : orderForm.submit(); }
             return;
         }
         if (inEditable(e)) return;
@@ -290,10 +305,12 @@ function openReceipt(metric, label, cardEl, extraParams) {
         params += '&year=' + encodeURIComponent(cardEl.getAttribute('data-year'));
         subtitle = cardEl.getAttribute('data-year') + ' 年';
     }
-    // 额外参数（图表点击时传入 year/month）
+    // 额外参数（图表点击时传入 year/month；P20e 时薪卡传入 from/to 供 income 口径）
     if (extraParams) {
         if (extraParams.year) { params += '&year=' + encodeURIComponent(extraParams.year); subtitle = extraParams.year + ' 年'; }
         if (extraParams.month) { params += '&month=' + encodeURIComponent(extraParams.month); subtitle += ' ' + extraParams.month + '月'; }
+        if (extraParams.from) { params += '&from=' + encodeURIComponent(extraParams.from); }
+        if (extraParams.to) { params += '&to=' + encodeURIComponent(extraParams.to); }
     }
 
     document.getElementById('receipt-title').textContent = label || '明细';
@@ -385,22 +402,37 @@ function initKanban() {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                     body: `stage=${encodeURIComponent(newStage)}`
-                }).then(res => res.text()).then(html => {
-                    evt.item.outerHTML = html;
-                    updateKanbanStats();
-                    showToast('阶段已更新', 'success');
+                }).then(res => {
+                    // Spec12：400 = 阶段不在快照内，显示 Toast 并恢复原位
+                    if (!res.ok) {
+                        res.text().then(msg => {
+                            showToast(msg || '该阶段不在此订单流程中', 'error');
+                            _revertKanbanDrag(evt);
+                        });
+                        return;
+                    }
+                    handleWorkHoursTrigger(res);
+                    return res.text().then(html => {
+                        evt.item.outerHTML = html;
+                        updateKanbanStats();
+                        showToast('阶段已更新', 'success');
+                    });
                 }).catch(() => {
                     showToast('更新失败，请重试', 'error');
-                    // 恢复原位：把卡片移回原列原位置
-                    if (evt.from && evt.item) {
-                        var ref = evt.from.children[evt.oldIndex] || null;
-                        evt.from.insertBefore(evt.item, ref);
-                    }
-                    updateKanbanStats();
+                    _revertKanbanDrag(evt);
                 });
             }
         });
     });
+}
+
+// Spec12：看板拖拽失败恢复原位
+function _revertKanbanDrag(evt) {
+    if (evt.from && evt.item) {
+        var ref = evt.from.children[evt.oldIndex] || null;
+        evt.from.insertBefore(evt.item, ref);
+    }
+    updateKanbanStats();
 }
 
 function updateKanbanStats() {
@@ -634,10 +666,9 @@ function removeImage(orderId, imageId) {
 
 /* ═══════════════════════════════════════════════════════════
    统计模块自定义显隐（P16h）
-   - 扫描 [data-module] 容器，应用持久化状态（最小化 / 隐藏）
+   - 扫描 [data-module] 容器，应用持久化状态（显示 / 隐藏）
    - 偏好持久化到 localStorage，key = 'modules:' + pageKey
-   - 操作入口统一在页面右上角「模块设置」面板（P20-F15：不再向
-     子容器内注入最小化/隐藏按钮，保持模块内容区干净）
+   - 操作入口统一在页面右上角「模块设置」面板（P20-F15）
    ═══════════════════════════════════════════════════════════ */
 
 function loadModulePrefs(pageKey) {
@@ -652,20 +683,16 @@ function saveModulePref(pageKey, id, state) {
 }
 
 function applyModuleState(el, state) {
-    el.classList.toggle('module-minimized', state === 'min');
     el.classList.toggle('module-hidden', state === 'hide');
-    var minBtn = el.querySelector('.module-toolbar-btn[data-act="min"] [data-lucide]');
-    if (minBtn) {
-        minBtn.setAttribute('data-lucide', state === 'min' ? 'chevron-down' : 'chevron-up');
-    }
+    syncGridModuleState(el, state);   // P21a：收入页网格下同步 widget 摘除/挂回
 }
 
 function getModuleState(prefs, id) {
-    return prefs[id] === 'min' ? 'min' : (prefs[id] === 'hide' ? 'hide' : 'show');
+    return prefs[id] === 'hide' ? 'hide' : 'show';   // 历史 'min' 值按显示处理
 }
 
-// P20-F15：原 injectModuleToolbar（向模块容器注入最小化/隐藏按钮）已移除，
-// 最小化/展开/隐藏统一经右上角「模块设置」面板操作（applyModuleState 不变）。
+// P20-F15：原 injectModuleToolbar（向模块容器注入操作按钮）已移除，
+// 显示/隐藏统一经右上角「模块设置」面板操作（applyModuleState 不变）。
 
 function collectModules() {
     var out = [];
@@ -684,8 +711,6 @@ function syncModuleSettingsPanel(pageKey) {
         var state = getModuleState(prefs, id);
         var chk = row.querySelector('input[type="checkbox"]');
         if (chk) chk.checked = (state !== 'hide');
-        var minChk = row.querySelector('.module-min-toggle');
-        if (minChk) minChk.checked = (state === 'min');
     });
 }
 
@@ -696,7 +721,6 @@ function buildModuleSettingsPanel(pageKey, modules) {
     modules.forEach(function(m) {
         html += '<div class="module-setting-row" data-module-id="' + m.id + '">'
             + '<label class="module-setting-main"><input type="checkbox"> ' + m.title + '</label>'
-            + '<label class="module-setting-min"><input type="checkbox" class="module-min-toggle"> 最小化</label>'
             + '</div>';
     });
     html += '<div class="module-settings-foot"><button type="button" class="btn btn-sm btn-ghost" onclick="resetModules(\'' + pageKey + '\')">恢复默认</button></div>';
@@ -706,16 +730,8 @@ function buildModuleSettingsPanel(pageKey, modules) {
         var row = panel.querySelector('.module-setting-row[data-module-id="' + m.id + '"]');
         if (!row) return;
         var showChk = row.querySelector('.module-setting-main input');
-        var minChk = row.querySelector('.module-min-toggle');
         showChk.addEventListener('change', function() {
-            var next = showChk.checked ? (minChk.checked ? 'min' : 'show') : 'hide';
-            applyModuleState(m.el, next);
-            saveModulePref(pageKey, m.id, next);
-            if (window.lucide) lucide.createIcons();
-        });
-        minChk.addEventListener('change', function() {
-            if (!showChk.checked) { showChk.checked = true; }
-            var next = minChk.checked ? 'min' : 'show';
+            var next = showChk.checked ? 'show' : 'hide';
             applyModuleState(m.el, next);
             saveModulePref(pageKey, m.id, next);
             if (window.lucide) lucide.createIcons();
@@ -736,7 +752,23 @@ function resetModules(pageKey) {
     if (window.lucide) lucide.createIcons();
 }
 
+// P20e：/income 旧「图表行」模块键一次性迁移为按块键（P16h 偏好继承）
+function migrateIncomeModulePrefs(pageKey) {
+    if (pageKey !== '/income') return;
+    var prefs = loadModulePrefs(pageKey);
+    var map = { 'charts-row1': ['monthly-stats', 'type-distribution'], 'charts-row2': ['projected', 'top-customers'] };
+    var changed = false;
+    Object.keys(map).forEach(function(oldKey) {
+        if (!prefs[oldKey]) return;
+        map[oldKey].forEach(function(newKey) { if (!prefs[newKey]) prefs[newKey] = prefs[oldKey]; });
+        delete prefs[oldKey];
+        changed = true;
+    });
+    if (changed) localStorage.setItem('modules:' + pageKey, JSON.stringify(prefs));
+}
+
 function initModuleCustomizer(pageKey) {
+    migrateIncomeModulePrefs(pageKey);
     var modules = collectModules();
     if (!modules.length) return;   // 无统计模块的页面 no-op
     var prefs = loadModulePrefs(pageKey);
@@ -755,9 +787,177 @@ function initModuleCustomizer(pageKey) {
 }
 
 
-/* ═══════════════════════════════════════════════════════════
-   初始化
-   ═══════════════════════════════════════════════════════════ */
+/* ═══════════════════════════════════════════════════════
+   P21a 收入页自定义布局（gridstack）
+   模板已用 gs-* 属性写好默认坐标；gridstack 未加载/初始化失败时
+   `.dash-grid` 不带 layout-active，退化为服务端顺序块流（零感知降级）。
+   服务端 data-layout 提供用户坐标（空串=默认）；仅 12 列（宽屏）下允许
+   保存——窄屏 gridstack 折成 1/2 列，此时 save() 会返回折叠后坐标。
+   ═══════════════════════════════════════════════════════ */
+
+function incomeSafeJson(raw) {
+    try { return JSON.parse(raw); } catch (e) { return null; }
+}
+
+function initIncomeLayout() {
+    var wrap = document.getElementById('income-grid');
+    if (!wrap) return;                              // 非收入页
+    if (typeof GridStack === 'undefined') return;   // vendor 未加载 → 顺序块流
+
+    var grid;
+    try {
+        grid = GridStack.init({
+            column: 12, cellHeight: 20, margin: 8, float: false,
+            staticGrid: true, animate: true,
+            handle: '.card-header, .stats-grid',
+            columnOpts: { breakpointForWindow: true, breakpoints: [{ w: 1024, c: 1 }, { w: 1200, c: 2 }] }
+        }, wrap);
+    } catch (e) {
+        logFrontendError('P21a', 'gridstack 初始化失败：' + e.message, 'app.js', 0);
+        return;
+    }
+    window.__incomeGrid = grid;
+    wrap.classList.add('layout-active');
+
+    var saved = incomeSafeJson(wrap.getAttribute('data-layout') || 'null');
+    if (wrap.getAttribute('data-layout') && !Array.isArray(saved)) {
+        logFrontendError('P21a', '布局 JSON 非法，回退默认布局', 'app.js', 0);
+        saved = null;
+    }
+    if (Array.isArray(saved) && saved.length) applyIncomeLayout(grid, saved);
+
+    var editBtn = document.getElementById('layout-edit-btn');
+    var resetBtn = document.getElementById('layout-reset-btn');
+    if (editBtn) editBtn.style.display = '';
+    if (resetBtn && Array.isArray(saved) && saved.length) resetBtn.style.display = '';
+
+    var timer = null;
+    grid.on('change', function() {
+        if (grid.opts.staticGrid) return;   // 只读态（含 P16h 显隐引发的 update）不落库
+        clearTimeout(timer);
+        timer = setTimeout(saveIncomeLayout, 800);
+    });
+    grid.on('resizestop', function(ev, item) {
+        var cv = item && item.querySelector('canvas');
+        var chart = cv && window.Chart && Chart.getChart(cv);
+        if (chart) chart.resize();
+    });
+}
+
+// 按 gs-id 套用服务端坐标；saved 里没有的块（新增块）自动追加到底部
+function applyIncomeLayout(grid, saved) {
+    var pos = {}, maxY = 0;
+    saved.forEach(function(n) {
+        if (!n || !n.id) return;
+        pos[n.id] = n;
+        maxY = Math.max(maxY, (n.y || 0) + (n.h || 1));
+    });
+    var plan = [];
+    grid.getGridItems().forEach(function(item) {
+        var id = item.getAttribute('gs-id');
+        var p = pos[id];
+        if (p) {
+            plan.push([item, { x: p.x || 0, y: p.y || 0, w: p.w || 1, h: p.h || 1 }]);
+        } else {
+            var h = parseInt(item.getAttribute('gs-h'), 10) || 10;
+            plan.push([item, { x: 0, y: maxY, w: parseInt(item.getAttribute('gs-w'), 10) || 12, h: h }]);
+            maxY += h;
+        }
+    });
+    grid.batchUpdate();
+    plan.forEach(function(pair) { grid.update(pair[0], pair[1]); });
+    grid.commit();
+}
+
+function toggleIncomeLayoutEdit() {
+    var grid = window.__incomeGrid;
+    if (!grid) return;
+    var editing = !grid.opts.staticGrid;
+    if (!editing && grid.getColumn() !== 12) {
+        showToast('窗口太窄（已折成单列），拉宽后再自定义布局', 'warning');
+        return;
+    }
+    grid.setStatic(editing);   // 正在编辑 → 设为静态（退出）
+    var wrap = document.getElementById('income-grid');
+    if (wrap) wrap.classList.toggle('layout-editing', !editing);
+    var btn = document.getElementById('layout-edit-btn');
+    if (btn) {
+        btn.textContent = editing ? '布局' : '完成';
+        btn.classList.toggle('btn-primary', !editing);
+        btn.classList.toggle('btn-secondary', editing);
+    }
+    if (!editing) showToast('拖标题栏换位 · 拖右下角缩放', 'info');
+}
+
+// 收集全部块坐标：隐藏块用摘除前坐标
+function collectIncomeLayout() {
+    var wrap = document.getElementById('income-grid');
+    if (!wrap) return [];
+    var out = [];
+    wrap.querySelectorAll('.grid-stack-item').forEach(function(item) {
+        var id = item.getAttribute('gs-id');
+        if (!id) return;
+        var src = item.dataset.gsHidePos ? incomeSafeJson(item.dataset.gsHidePos) : item.gridstackNode;
+        if (!src) return;
+        out.push({ id: id, x: src.x || 0, y: src.y || 0, w: src.w || 1, h: src.h || 1 });
+    });
+    return out;
+}
+
+function saveIncomeLayout() {
+    var grid = window.__incomeGrid;
+    if (!grid || grid.getColumn() !== 12) return;   // 折叠列下的坐标不写库
+    var nodes = collectIncomeLayout();
+    if (!nodes.length) return;
+    var fd = new FormData();
+    fd.append('layout', JSON.stringify(nodes));
+    fetch('/settings/income-layout', { method: 'POST', body: fd }).then(function(res) {
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        var rb = document.getElementById('layout-reset-btn');
+        if (rb) rb.style.display = '';
+    }).catch(function(err) {
+        showToast('布局保存失败：' + err.message, 'error');
+    });
+}
+
+function resetIncomeLayout() {
+    var fd = new FormData();
+    fd.append('layout', '');
+    fetch('/settings/income-layout', { method: 'POST', body: fd }).then(function(res) {
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        window.location.reload();   // 重新渲染 → 模板 gs-* 默认坐标生效
+    }).catch(function(err) {
+        showToast('布局重置失败：' + err.message, 'error');
+    });
+}
+
+// P16h 显隐在网格下的等价操作（applyModuleState 调用；非收入页 no-op）
+function syncGridModuleState(el, state) {
+    var grid = window.__incomeGrid;
+    if (!grid || !el.closest) return;
+    var item = el.closest('.grid-stack-item');
+    if (!item) return;
+
+    if (state === 'hide') {
+        var n = item.gridstackNode;
+        if (n) {
+            item.dataset.gsHidePos = JSON.stringify({ x: n.x, y: n.y, w: n.w, h: n.h });
+            grid.removeWidget(item, false);   // 保留 DOM，只摘出网格（腾出空间）
+        }
+        item.style.display = 'none';
+        return;
+    }
+
+    if (item.style.display === 'none') item.style.display = '';
+    if (!item.gridstackNode) {
+        grid.makeWidget(item);
+        var p = item.dataset.gsHidePos ? incomeSafeJson(item.dataset.gsHidePos) : null;
+        if (p) grid.update(item, p);
+        delete item.dataset.gsHidePos;
+    }
+}
+
+
 
 /* ═══════════════════════════════════════════════════════
    #41 自动检测更新
@@ -839,6 +1039,7 @@ document.addEventListener('DOMContentLoaded', function() {
     initKanban();
     initSidebarState();
     initImageUpload();
+    initIncomeLayout();                        // P21a 收入页自定义布局（须早于 P16h：网格先建，隐藏块才能正确摘除）
     initModuleCustomizer(location.pathname);   // P16h 统计模块自定义显隐
     checkForUpdate(false);                     // #41/#46 启动自检更新（每会话一次，失败静默）
 });
@@ -886,15 +1087,55 @@ window.addEventListener('pageshow', function(e) {
 });
 
 // HTMX 事件
+// P20d：完成终态未录工时 → 弹补录窗（该监听器先于 orderUpdated 触发，见后端 triggers 键序）
+document.addEventListener('promptWorkHours', function(e) {
+    var d = (e && e.detail) || {};
+    if (!d.id) return;
+    window.__workHoursPromptActive = true;
+    openCenterModal('/orders/' + d.id + '/work-hours', '记录工时');
+});
+
 document.addEventListener('orderUpdated', function(e) {
     closeDrawer();
     showToast('订单已更新', 'success');
     // P18-F7：内联抽屉保存命中「过去时间+完成」→ 抽屉关闭后打开归档确认
     var d = (e && e.detail) || {};
     if (d.archiveConfirm) {
-        setTimeout(function() { archiveOrder(d.archiveConfirm, false); }, 300);
+        // P20d：补录工时弹窗在场时先暂存，等其关闭后再串行弹归档确认
+        if (window.__workHoursPromptActive) {
+            window.__pendingArchiveConfirm = d.archiveConfirm;
+        } else {
+            setTimeout(function() { archiveOrder(d.archiveConfirm, false); }, 300);
+        }
     }
 });
+
+// P20d：看板/快速切换走原生 fetch，HX-Trigger 头不会自动触发，需手动解析
+function handleWorkHoursTrigger(res) {
+    try {
+        var raw = res.headers.get('HX-Trigger');
+        if (!raw) return;
+        var data = JSON.parse(raw);
+        if (data.promptWorkHours && data.promptWorkHours.id) {
+            setTimeout(function() {
+                window.__workHoursPromptActive = true;
+                openCenterModal('/orders/' + data.promptWorkHours.id + '/work-hours', '记录工时');
+            }, 200);
+        }
+    } catch (err) { /* 头缺失或非 JSON：忽略 */ }
+}
+
+// P20d：报价建议条「采用」→ 回填表单金额字段并触发实收联动
+function applyQuoteSuggestion(btn, amount) {
+    var form = btn.closest('form');
+    if (!form) return;
+    var input = form.querySelector('input[name="deposit"]:not([disabled])');
+    if (!input) return;
+    input.value = amount;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    showToast('已采用建议报价 ¥' + amount, 'success');
+}
 
 document.addEventListener('orderDeleted', function() {
     showToast('订单已删除', 'info');
@@ -908,7 +1149,7 @@ document.addEventListener('orderDeleted', function() {
 
 
 /* ═══════════════════════════════════════════════════════════
-   系统工具 — 错误日志 + 缓存清理 + 重启
+   系统工具 — 错误日志 + 重启
    ═══════════════════════════════════════════════════════════ */
 
 // ── 全局错误捕获 ──
@@ -999,28 +1240,105 @@ function clearErrorLogs() {
     showToast('错误日志已清空', 'success');
 }
 
-// ── 缓存清理 ──
-function clearLocalStorage() {
-    if (!confirm('确定清除本地存储？将重置统计范围偏好等设置。')) return;
-    var logs = localStorage.getItem('app-error-logs');
-    localStorage.clear();
-    if (logs) localStorage.setItem('app-error-logs', logs);  // 保留错误日志
-    showToast('本地存储已清除', 'success');
+// ── P22b 数据备份管理 ──
+function loadBackupList() {
+    var container = document.getElementById('backup-list');
+    if (!container) return;
+    fetch('/settings/backups')
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+            if (!d.success) {
+                container.innerHTML = '<div style="color:var(--color-danger);padding:var(--space-sm);">加载失败: ' + escHtml(d.error || '') + '</div>';
+                return;
+            }
+            var backups = d.backups || [];
+            if (!backups.length) {
+                container.innerHTML = '<div style="color:var(--color-text-tertiary);padding:var(--space-sm);">暂无备份，请手动创建</div>';
+                return;
+            }
+            var html = '';
+            for (var i = 0; i < backups.length; i++) {
+                var b = backups[i];
+                html += '<div style="display:flex;align-items:center;gap:var(--space-sm);padding:8px 12px;background:var(--color-bg);border-radius:var(--radius-sm);margin-bottom:4px;">';
+                html += '<div style="flex:1;min-width:0;">';
+                html += '<div style="font-weight:500;">' + escHtml(b.mtime) + '</div>';
+                html += '<div style="font-size:0.75rem;color:var(--color-text-tertiary);">' + escHtml(b.size) + ' KB · ' + escHtml(b.orders) + ' 订单 · ' + escHtml(b.customers) + ' 客户</div>';
+                html += '</div>';
+                html += '<button class="btn btn-ghost btn-sm" style="font-size:0.78rem;" onclick="restoreBackup(\'' + escHtml(b.name) + '\')">恢复</button>';
+                html += '<button class="btn btn-ghost btn-sm" style="color:var(--color-danger);font-size:0.78rem;" onclick="deleteBackup(\'' + escHtml(b.name) + '\')">删除</button>';
+                html += '</div>';
+            }
+            container.innerHTML = html;
+        })
+        .catch(function(e) {
+            container.innerHTML = '<div style="color:var(--color-danger);padding:var(--space-sm);">网络错误</div>';
+        });
 }
 
-function clearSessionStorage() {
-    sessionStorage.clear();
-    showToast('会话存储已清除', 'success');
+function createBackup() {
+    fetch('/settings/backup', { method: 'POST' })
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+            if (d.success) {
+                showToast('备份成功', 'success');
+                loadBackupList();
+            } else {
+                showToast('备份失败: ' + (d.error || '未知错误'), 'error');
+            }
+        })
+        .catch(function() { showToast('网络错误', 'error'); });
 }
 
-function clearAllStorage() {
-    if (!confirm('确定清除全部本地存储和会话存储？页面将刷新。')) return;
-    var logs = localStorage.getItem('app-error-logs');
-    localStorage.clear();
-    if (logs) localStorage.setItem('app-error-logs', logs);
-    sessionStorage.clear();
-    window.location.reload();
+function saveBackupDir() {
+    var input = document.getElementById('backup-dir-input');
+    if (!input) return;
+    var path = input.value.trim();
+    var formData = new FormData();
+    formData.append('path', path);
+    fetch('/settings/backup-dir', { method: 'POST', body: formData })
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+            if (d.success) {
+                showToast(d.message || '备份目录已保存', 'success');
+                loadBackupList();
+            } else {
+                showToast(d.message || '保存失败', 'error');
+            }
+        })
+        .catch(function() { showToast('网络错误', 'error'); });
 }
+
+function restoreBackup(filename) {
+    if (!confirm('确定恢复此备份？当前全部数据将被替换为该备份的内容！（恢复前会自动备份当前状态）')) return;
+    fetch('/settings/restore/' + encodeURIComponent(filename), { method: 'POST' })
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+            if (d.success) {
+                showToast('恢复成功，页面刷新中…', 'success');
+                setTimeout(function() { location.reload(); }, 800);
+            } else {
+                showToast('恢复失败: ' + (d.error || '未知错误'), 'error');
+            }
+        })
+        .catch(function() { showToast('网络错误', 'error'); });
+}
+
+function deleteBackup(filename) {
+    if (!confirm('确定删除此备份？删除后不可恢复。')) return;
+    fetch('/settings/backup/delete/' + encodeURIComponent(filename), { method: 'POST' })
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+            if (d.success) {
+                showToast('备份已删除', 'success');
+                loadBackupList();
+            } else {
+                showToast('删除失败: ' + (d.error || '未知错误'), 'error');
+            }
+        })
+        .catch(function() { showToast('网络错误', 'error'); });
+}
+
+loadBackupList();
 
 // ── 重启相关 ──
 function openAppFolder() {
@@ -1307,3 +1625,80 @@ var ColorPicker = (function() {
         hexToHsv: hexToHsv
     };
 })();
+
+/* ═══════════════════════════════════════════════════════════
+   P20a：图表主题 helper（Chart.js 统一样式）
+   收入页 4 图共用，后续时薪新图（P20e）复用同一地基。
+   ═══════════════════════════════════════════════════════════ */
+
+// 金额缩写：>=1w 显示 w、>=1k 显示 k（y 轴 ticks 与数据标签共用）
+function chartMoneyShort(v) {
+    return (v >= 10000) ? (v / 10000).toFixed(1) + 'w' : (v >= 1000 ? (v / 1000).toFixed(1) + 'k' : v);
+}
+
+// 读取当前主题 CSS 变量，输出图表统一样式件
+// 注：ticksColor/gridColor 供新图接线用；旧 4 图保持 Chart.js 默认坐标轴色（零视觉回归）
+function chartTheme() {
+    var cs = getComputedStyle(document.documentElement);
+    function cssVar(name, fallback) {
+        var v = cs.getPropertyValue(name);
+        return v ? v.trim() : fallback;
+    }
+    return {
+        text: cssVar('--color-text', '#0b0b0b'),
+        textSecondary: cssVar('--color-text-secondary', '#52514e'),
+        border: cssVar('--color-border', '#e1e0d9'),
+        surface: cssVar('--color-surface', '#fcfcfb'),
+        ticksColor: cssVar('--color-text-secondary', '#52514e'),
+        gridColor: cssVar('--color-border', '#e1e0d9'),
+        // 金额 tooltip（¥ + 千分位）
+        moneyTooltip: { callbacks: { label: function(ctx) { return '¥' + ctx.raw.toLocaleString(); } } },
+        // 金额 y 轴 ticks（k/w 缩写）
+        moneyTicks: { callback: chartMoneyShort },
+    };
+}
+
+// datalabels 插件工厂：数据点上方金额标签（k/w 缩写、跳过 0 值）
+// 颜色在每次绘制时读主题变量（原硬编码 #0b0b0b，暗色主题下不可见 → 跟随 --color-text）
+function makeDatalabels() {
+    return {
+        id: 'datalabels',
+        afterDraw: function(chart) {
+            var ctx = chart.ctx;
+            var color = chartTheme().text;
+            chart.data.datasets.forEach(function(ds, i) {
+                var meta = chart.getDatasetMeta(i);
+                meta.data.forEach(function(pt, j) {
+                    var v = ds.data[j];
+                    if (v === 0) return;
+                    ctx.fillStyle = color;
+                    ctx.font = '10px -apple-system, sans-serif';
+                    ctx.textAlign = 'center';
+                    ctx.fillText(chartMoneyShort(v), pt.x, pt.y - 10);
+                });
+            });
+        }
+    };
+}
+
+// 系列取色：优先配置色映射（日历品类着色 cal_* 同源），未配色按 8 色循环 + 透明度变体回退
+// （自 income.html 迁移；#42 品类可能超过 8 个，第二轮起叠透明度避免颜色重复难辨）
+var CHART_FALLBACK_COLORS = ['#2a78d6', '#1baf7a', '#eda100', '#008300', '#4a3aa7', '#e34948', '#e87ba4', '#eb6834'];
+function chartFallbackColor(i) {
+    var alphas = ['', 'b3', '66'];
+    var base = CHART_FALLBACK_COLORS[i % CHART_FALLBACK_COLORS.length];
+    var round = Math.floor(i / CHART_FALLBACK_COLORS.length);
+    return base + alphas[round % alphas.length];
+}
+// 单个系列取色（miss 序号由调用方维护）
+function seriesColor(name, colorMap, missIndex) {
+    return (colorMap || {})[name] || chartFallbackColor(missIndex || 0);
+}
+// 批量取色：未配色项 miss 计数器只对回退递增（与原 typeChartColors 一致）
+function seriesColors(labels, colorMap) {
+    var miss = 0;
+    var map = colorMap || {};
+    return labels.map(function(label) {
+        return map[label] || chartFallbackColor(miss++);
+    });
+}

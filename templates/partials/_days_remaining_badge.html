@@ -1,0 +1,40 @@
+{# 截稿日期剩余天数徽标 — 需要外层传入 order 对象（含 days_remaining 字段）和 input_id #}
+{% if order and order.days_remaining is defined and order.days_remaining is not none %}
+  {% set d = order.days_remaining %}
+  {% if d < 0 %}
+    {% set _text = '已逾期' ~ (-d) ~ '天' %}
+    {% set _color = 'var(--color-danger)' %}
+  {% elif d == 0 %}
+    {% set _text = '今日到期' %}
+    {% set _color = 'var(--color-warning)' %}
+  {% else %}
+    {% set _text = '剩余' ~ d ~ '天' %}
+    {% set _color = 'var(--color-warning)' if d <= 3 else 'var(--color-text-secondary)' %}
+  {% endif %}
+  <span class="days-remaining-badge" data-input-id="{{ input_id }}"
+        style="display:inline-flex;align-items:center;font-size:0.78rem;font-weight:600;color:{{ _color }};margin-left:6px;padding:2px 8px;border-radius:var(--radius-sm);background:color-mix(in srgb, {{ _color }} 10%, transparent);white-space:nowrap;">{{ _text }}</span>
+  <script>
+  (function(){
+    var badge = document.querySelector('.days-remaining-badge[data-input-id="{{ input_id }}"]');
+    if (!badge) return;
+    var input = document.getElementById('{{ input_id }}');
+    if (!input) return;
+    input.addEventListener('change', function(){
+      var val = input.value;
+      if (!val) { badge.style.display='none'; return; }
+      var end = new Date(val.slice(0,10));
+      if (isNaN(end.getTime())) { badge.style.display='none'; return; }
+      var today = new Date(); today.setHours(0,0,0,0);
+      var diff = Math.round((end - today) / 86400000);
+      var text, color;
+      if (diff < 0) { text = '已逾期' + (-diff) + '天'; color = 'var(--color-danger)'; }
+      else if (diff === 0) { text = '今日到期'; color = 'var(--color-warning)'; }
+      else { text = '剩余' + diff + '天'; color = diff <= 3 ? 'var(--color-warning)' : 'var(--color-text-secondary)'; }
+      badge.textContent = text;
+      badge.style.color = color;
+      badge.style.background = 'color-mix(in srgb, ' + color + ' 10%, transparent)';
+      badge.style.display = 'inline-flex';
+    });
+  })();
+  </script>
+{% endif %}

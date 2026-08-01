@@ -73,13 +73,23 @@
             </div>
             <div class="form-group">
                 <label for="current_stage">阶段</label>
-                <select name="current_stage">
+                <select name="current_stage" id="modal-stage-select">
                     {% for s in STAGE_CHOICES %}
                     <option value="{{ s }}" {% if s == (prefill.current_stage or '待开始') %}selected{% endif %}>{{ s }}</option>
                     {% endfor %}
                 </select>
             </div>
         </div>
+        {# Spec12：流程预设下拉 + 隐藏 stage_flow 字段 #}
+        <div class="form-group">
+            <label for="stage-flow-preset">阶段流程</label>
+            <select id="stage-flow-preset" onchange="onModalFlowPresetChange()">
+                {% for f in STAGE_FLOWS %}
+                <option value="{{ loop.index0 }}" {% if loop.first %}selected{% endif %}>{{ f.name|e }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <input type="hidden" name="stage_flow" id="modal-stage-flow-hidden" value="">
         <div class="form-group">
             <label for="payment_status">收款</label>
             <select name="payment_status">
@@ -136,6 +146,7 @@
                 <input type="date" name="page_deadline">
             </div>
         </div>
+        {% include "partials/_hourly_fields.html" %}
         <div class="form-group">
             <label for="notes">备注</label>
             <textarea name="notes" rows="2">{{ prefill.notes or '' }}</textarea>
@@ -207,6 +218,34 @@ function calcModalActual() {
 document.querySelector('[name="source"]').addEventListener('input', toggleModalFee);
 document.querySelector('[name="source"]').addEventListener('change', toggleModalFee);
 toggleModalFee();
+
+// Spec12：流程预设下拉 → 同步 stage_flow 隐藏字段 + 更新阶段 select
+var _MODAL_FLOWS = {{ STAGE_FLOWS | tojson }};
+function onModalFlowPresetChange() {
+    var sel = document.getElementById('stage-flow-preset');
+    var idx = parseInt(sel.value, 10);
+    var flow = _MODAL_FLOWS[idx];
+    var hidden = document.getElementById('modal-stage-flow-hidden');
+    if (flow && flow.stages) {
+        hidden.value = JSON.stringify(flow.stages);
+        // 更新阶段 select 为流程内的阶段名
+        var stageSelect = document.getElementById('modal-stage-select');
+        if (stageSelect) {
+            var stages = flow.stages;
+            stageSelect.innerHTML = '';
+            stages.forEach(function(s) {
+                var opt = document.createElement('option');
+                opt.value = s.name; opt.textContent = s.name;
+                stageSelect.appendChild(opt);
+            });
+        }
+    } else {
+        hidden.value = '';
+    }
+}
+// 初始化：选中第一条流程
+onModalFlowPresetChange();
+
 function deleteTpl() {
     var sel = document.getElementById('tpl-select');
     if (!sel || !sel.value) { alert('请先选择要删除的模板'); return; }

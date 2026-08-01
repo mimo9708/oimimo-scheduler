@@ -38,7 +38,21 @@ class OrderCreate(BaseModel):
     scheduled_end: Optional[str] = None
     is_repeat: bool = False
     repeat_count: int = Field(default=0, ge=0)
+    # P20b 时薪：工时单位小时，允许小数（step 0.5），范围 0~10000；留空 = None
+    estimated_hours: Optional[float] = Field(default=None, ge=0, le=10000)
+    work_hours: Optional[float] = Field(default=None, ge=0, le=10000)
+    # Spec12 阶段流程快照（JSON 字符串；实际结构校验交给 db.validate_stage_flow）
+    stage_flow: Optional[str] = None
     # 所有选择字段不再硬编码校验 — 值从 db.get_choices() 动态获取
+
+    @field_validator('estimated_hours', 'work_hours', mode='before')
+    @classmethod
+    def _norm_hours(cls, v):
+        """工时留空（表单空字符串）→ None，避免未填工时时校验失败。"""
+        if v is None:
+            return None
+        s = str(v).strip()
+        return None if not s else s
 
     @field_validator('scheduled_start', 'scheduled_end', 'page_deadline', mode='before')
     @classmethod
@@ -80,6 +94,7 @@ class OrderCreate(BaseModel):
 class OrderUpdate(OrderCreate):
     is_archived: Optional[bool] = None
     sort_order: Optional[int] = None
+    exclude_hourly: bool = False  # P20b 单订单排除时薪统计
 
 
 class CustomerCreate(BaseModel):

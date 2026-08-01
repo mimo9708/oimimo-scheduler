@@ -1,0 +1,45 @@
+{# Spec12：阶段进度步进器组件（横向连线 + 圆圈节点 + 标签在下）
+   使用：{% from "partials/_stage_timeline.html" import stage_timeline %}
+         {{ stage_timeline(order) }}
+   order 需为 dict，含 current_stage / stage_flow；_stage_flow_parsed 由路由注入
+#}
+{% macro stage_timeline(order) %}
+{% set stages = order.get('_stage_flow_parsed') or [] %}
+{% set cur = order.current_stage %}
+{% set is_refund = (cur == '退单') %}
+{% set is_done = (cur == '完成') %}
+{# 找当前索引 #}
+{% set ns = namespace(idx=-1) %}
+{% for s in stages %}
+    {% if s.name == cur and ns.idx == -1 %}{% set ns.idx = loop.index0 %}{% endif %}
+{% endfor %}
+{% set cur_idx = ns.idx %}
+{% set cur_progress = stages[cur_idx].progress if cur_idx >= 0 else 0 %}
+<div class="stage-timeline{% if is_refund %} is-refund{% endif %}{% if is_done %} is-done{% endif %}"
+     role="progressbar" aria-valuenow="{{ cur_progress }}" aria-valuemin="0" aria-valuemax="100"
+     aria-label="阶段进度 {{ cur_progress }}%">
+    {% if is_refund %}
+    <div class="stage-timeline-refund-mark">已退单</div>
+    {% endif %}
+    <div class="stage-timeline-stepper">
+        {% for s in stages %}
+        {% set is_current = (loop.index0 == cur_idx) %}
+        {% set is_past = (loop.index0 < cur_idx) %}
+        {% set is_future = (loop.index0 > cur_idx) %}
+        <div class="stage-timeline-step{% if is_current %} is-current{% endif %}{% if is_past %} is-past{% endif %}{% if is_future %} is-future{% endif %}">
+            <div class="stage-timeline-connector-left" aria-hidden="true"></div>
+            <div class="stage-timeline-dot" aria-hidden="true">
+                {% if is_past %}
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                {% endif %}
+            </div>
+            <div class="stage-timeline-connector-right" aria-hidden="true"></div>
+            <div class="stage-timeline-label">{{ s.name|e }}</div>
+            {% if is_current %}
+            <div class="stage-timeline-pct">{{ s.progress }}%</div>
+            {% endif %}
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endmacro %}

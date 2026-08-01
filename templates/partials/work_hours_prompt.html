@@ -1,0 +1,27 @@
+<!-- P20d：完成补录工时弹窗（渲染进 #center-modal-body） -->
+<div style="padding:8px 4px;">
+    <h2 style="font-size:1.05rem;margin-bottom:var(--space-sm);">记录实际工时</h2>
+    <p style="color:var(--color-text-secondary);font-size:0.9rem;margin-bottom:var(--space-md);">
+        「{{ order.project_name }}」已完成，补录实际工时后可参与时薪统计。
+    </p>
+    {# 注意：htmx 非 GET 请求会自动附带 closest form 的值，
+       「稍后」「不统计」按钮必须放在 form 外，避免 action 键冲突 #}
+    <form hx-post="/orders/{{ order.id }}/work-hours"
+          hx-target="#center-modal-body" hx-swap="innerHTML"
+          style="display:flex;flex-direction:column;gap:var(--space-sm);">
+        <label style="font-size:0.85rem;color:var(--color-text-secondary);">
+            实际工时（小时）
+            <input type="number" name="work_hours" step="0.5" min="0.5" max="10000" required
+                   value="{{ order.estimated_hours or '' }}"
+                   style="width:100%;margin-top:4px;" autofocus>
+        </label>
+        <button type="submit" class="btn btn-primary" style="width:100%;">保存工时</button>
+    </form>
+    <div style="display:flex;flex-direction:column;gap:var(--space-xs);margin-top:var(--space-sm);">
+        <button type="button" class="btn" style="width:100%;" onclick="closeCenterModal()">稍后再填</button>
+        <button type="button" class="btn" style="width:100%;color:var(--color-text-tertiary);"
+                hx-post="/orders/{{ order.id }}/work-hours"
+                hx-vals='{"action": "exclude"}'
+                hx-target="#center-modal-body" hx-swap="innerHTML">此订单不参与时薪统计</button>
+    </div>
+</div>

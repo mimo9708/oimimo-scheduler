@@ -76,6 +76,23 @@
         </div>
 
         <!-- 来源 + 阶段 -->
+        {# Spec12：内联编辑表单时间轴 #}
+        {% from "partials/_stage_timeline.html" import stage_timeline %}
+        <div class="stage-timeline-compact" style="margin-bottom:8px;">
+            {{ stage_timeline(order) }}
+        </div>
+        {# Spec12：流程预设切换 + 隐藏 stage_flow #}
+        <div class="form-group" style="margin-bottom:8px;">
+            <label style="font-size:0.78rem;color:var(--color-text-tertiary);">切换阶段流程</label>
+            <select id="inline-stage-flow-preset" onchange="onInlineFlowPresetChange()" style="font-size:0.85rem;">
+                <option value="" selected>— 保持当前流程 —</option>
+                {% for f in STAGE_FLOWS %}
+                <option value="{{ loop.index0 }}">{{ f.name|e }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <input type="hidden" name="stage_flow" id="inline-stage-flow-hidden"
+               value='{{ order._stage_flow_parsed | tojson }}'>
         <div class="form-row">
             <div class="form-group">
                 <label>来源</label>
@@ -92,10 +109,15 @@
             </div>
             <div class="form-group">
                 <label>当前阶段</label>
-                <select name="current_stage">
-                    {% for s in STAGE_CHOICES %}
-                    <option value="{{ s }}" {% if order.current_stage == s %}selected{% endif %}>{{ s }}</option>
+                <select name="current_stage" id="inline-stage-select">
+                    {% for s in order._stage_flow_parsed %}
+                    <option value="{{ s.name }}" {% if order.current_stage == s.name %}selected{% endif %}>{{ s.name }}</option>
                     {% endfor %}
+                    {% if order.current_stage == '退单' %}
+                    <option value="退单" selected>退单</option>
+                    {% else %}
+                    <option value="退单">退单</option>
+                    {% endif %}
                 </select>
             </div>
         </div>
@@ -178,14 +200,16 @@
 
         <div class="form-row">
             <div class="form-group date-field">
-                <label>排单截止</label>
-                <input type="{{ 'datetime-local' if order.scheduled_end and 'T' in order.scheduled_end else 'date' }}" name="scheduled_end" value="{{ order.scheduled_end or '' }}">
+                <label>排单截止{% set input_id = 'inline-scheduled-end' %}{% include "partials/_days_remaining_badge.html" with context %}</label>
+                <input type="{{ 'datetime-local' if order.scheduled_end and 'T' in order.scheduled_end else 'date' }}" name="scheduled_end" id="inline-scheduled-end" value="{{ order.scheduled_end or '' }}">
             </div>
             <div class="form-group">
                 <label>备注</label>
                 <textarea name="notes" rows="2">{{ order.notes or '' }}</textarea>
             </div>
         </div>
+
+        {% include "partials/_hourly_fields.html" %}
 
         {% if order.is_repeat %}
         <div style="padding:6px 10px;background:var(--color-bg);border-radius:var(--radius-sm);font-size:0.78rem;color:var(--color-text-secondary);margin-top:var(--space-sm);">
@@ -227,6 +251,56 @@ function calcInlineActual() {
 document.querySelector('[name=\"source\"]').addEventListener('input',toggleInlineFinance);
 document.querySelector('[name=\"source\"]').addEventListener('change',toggleInlineFinance);
 calcInlineActual();
+
+// Spec12：流程预设切换 → 更新 stage_flow 隐藏字段 + 阶段 select
+var _INLINE_FLOWS = {{ STAGE_FLOWS | tojson }};
+var _INLINE_ORIGINAL_FLOW = '{{ order._stage_flow_parsed | tojson | replace("'", "\\'") }}';
+function onInlineFlowPresetChange() {
+    var sel = document.getElementById('inline-stage-flow-preset');
+    var val = sel.value;
+    var hidden = document.getElementById('inline-stage-flow-hidden');
+    var stageSelect = document.getElementById('inline-stage-select');
+    if (val === '') {
+        hidden.value = _INLINE_ORIGINAL_FLOW;
+        // 恢复原始阶段选项
+        if (stageSelect) {
+            var orig = JSON.parse(_INLINE_ORIGINAL_FLOW);
+            var curVal = stageSelect.value;
+            stageSelect.innerHTML = '';
+            orig.forEach(function(s) {
+                var opt = document.createElement('option');
+                opt.value = s.name; opt.textContent = s.name;
+                if (s.name === curVal) opt.selected = true;
+                stageSelect.appendChild(opt);
+            });
+            // 退单选项
+            var retOpt = document.createElement('option');
+            retOpt.value = '退单'; retOpt.textContent = '退单';
+            if (curVal === '退单') retOpt.selected = true;
+            stageSelect.appendChild(retOpt);
+        }
+        return;
+    }
+    var idx = parseInt(val, 10);
+    var flow = _INLINE_FLOWS[idx];
+    if (flow && flow.stages) {
+        hidden.value = JSON.stringify(flow.stages);
+        if (stageSelect) {
+            var curVal = stageSelect.value;
+            stageSelect.innerHTML = '';
+            flow.stages.forEach(function(s) {
+                var opt = document.createElement('option');
+                opt.value = s.name; opt.textContent = s.name;
+                stageSelect.appendChild(opt);
+            });
+            var retOpt = document.createElement('option');
+            retOpt.value = '退单'; retOpt.textContent = '退单';
+            stageSelect.appendChild(retOpt);
+            var found = flow.stages.some(function(s) { return s.name === curVal; });
+            if (found) stageSelect.value = curVal;
+        }
+    }
+}
 
 // 自定义日历颜色 — 原生滑动面板
 function initInlineColorPicker() {

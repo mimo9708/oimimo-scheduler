@@ -224,7 +224,7 @@ def show_postcard(url, state):
 
     def clear_cache():
         """清除缓存（__pycache__ 目录）"""
-        if not tkmb.askyesno('确认', '确定清除缓存？\n将删除程序目录下的 __pycache__ 文件夹。'):
+        if not tkmb.askyesno('确认', '确定清除缓存？\n将删除 __pycache__ 编译缓存（开发者调试用，普通用户无需操作）。\n数据库文件 orders.db 不受影响。'):
             return
 
         cleaned = []

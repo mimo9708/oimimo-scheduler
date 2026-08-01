@@ -44,13 +44,23 @@
             </select>
         </div>
         <div class="form-group">
-            <label>阶段</label>
-            <select name="current_stage">
-                {% for s in STAGE_CHOICES %}
-                <option value="{{ s }}" {% if s == (d.current_stage or '待开始') %}selected{% endif %}>{{ s }}</option>
+            <label>阶段流程</label>
+            <select id="tpl-stage-flow-preset" onchange="onTplFlowChange()">
+                <option value="">— 不指定 —</option>
+                {% for f in STAGE_FLOWS %}
+                <option value="{{ loop.index0 }}">{{ f.name|e }}</option>
                 {% endfor %}
             </select>
         </div>
+    </div>
+    <input type="hidden" name="stage_flow" id="tpl-stage-flow-hidden" value='{{ d.stage_flow or "" }}'>
+    <div class="form-group">
+        <label>阶段</label>
+        <select name="current_stage" id="tpl-stage-select">
+            {% for s in STAGE_CHOICES %}
+            <option value="{{ s }}" {% if s == (d.current_stage or '待开始') %}selected{% endif %}>{{ s }}</option>
+            {% endfor %}
+        </select>
     </div>
     <div class="form-group">
         <label>收款</label>
@@ -78,6 +88,39 @@
             <input type="number" name="platform_fee_pct" step="0.1" min="0" max="100" value="{{ d.platform_fee_pct or '' }}">
         </div>
     </div>
+    {# 排期字段 — 与新建订单表单同步 #}
+    <div style="font-size:0.82rem;font-weight:600;color:var(--color-text-secondary);margin-top:var(--space-sm);">排期</div>
+    <div class="form-row">
+        <div class="form-group">
+            <label>排单开始</label>
+            <input type="date" name="scheduled_start" value="{{ d.scheduled_start or '' }}">
+        </div>
+        <div class="form-group">
+            <label>排单截止</label>
+            <input type="date" name="scheduled_end" value="{{ d.scheduled_end or '' }}">
+        </div>
+    </div>
+    <div class="form-group">
+        <label>页面截稿日</label>
+        <input type="date" name="page_deadline" value="{{ d.page_deadline or '' }}">
+    </div>
+    {# 工时字段 — 与新建订单表单同步 #}
+    <div style="font-size:0.82rem;font-weight:600;color:var(--color-text-secondary);margin-top:var(--space-sm);">工时</div>
+    <div class="form-row">
+        <div class="form-group">
+            <label>预估工时 (h)</label>
+            <input type="number" name="estimated_hours" step="0.5" min="0" value="{{ d.estimated_hours or '' }}" placeholder="如 8">
+        </div>
+        <div class="form-group">
+            <label>实际工时 (h)</label>
+            <input type="number" name="work_hours" step="0.5" min="0" value="{{ d.work_hours or '' }}" placeholder="完成后填写">
+        </div>
+    </div>
+    <label style="display:flex;align-items:center;gap:6px;font-weight:normal;cursor:pointer;font-size:0.82rem;">
+        <input type="checkbox" name="exclude_hourly" value="1" style="width:auto;"
+               {% if d.exclude_hourly|string == '1' %}checked{% endif %}>
+        此订单不参与时薪统计
+    </label>
     <div class="form-group">
         <label>备注</label>
         <textarea name="notes" rows="2">{{ d.notes or '' }}</textarea>
@@ -88,3 +131,69 @@
                 hx-get="/orders/templates/list" hx-target="#tpl-mgr-list" hx-swap="innerHTML">取消</button>
     </div>
 </form>
+<script>
+var _TPL_FLOWS = {{ STAGE_FLOWS | tojson }};
+function onTplFlowChange() {
+    var sel = document.getElementById('tpl-stage-flow-preset');
+    var val = sel.value;
+    var hidden = document.getElementById('tpl-stage-flow-hidden');
+    var stageSelect = document.getElementById('tpl-stage-select');
+    if (val === '') {
+        hidden.value = '';
+        return;
+    }
+    var flow = _TPL_FLOWS[parseInt(val, 10)];
+    if (flow && flow.stages) {
+        hidden.value = JSON.stringify(flow.stages);
+        if (stageSelect) {
+            var curVal = stageSelect.value;
+            stageSelect.innerHTML = '';
+            flow.stages.forEach(function(s) {
+                var opt = document.createElement('option');
+                opt.value = s.name; opt.textContent = s.name;
+                if (s.name === curVal) opt.selected = true;
+                stageSelect.appendChild(opt);
+            });
+            // 退单选项始终保留
+            var cancelOpt = document.createElement('option');
+            cancelOpt.value = '退单'; cancelOpt.textContent = '退单';
+            stageSelect.appendChild(cancelOpt);
+        }
+    }
+}
+// 编辑模式：尝试自动选中匹配的流程预设
+{% if tpl and d.stage_flow %}
+(function() {
+    try {
+        var raw = document.getElementById('tpl-stage-flow-hidden').value;
+        if (!raw) return;
+        var savedFlow = JSON.parse(raw);
+        // 按 stages 名称匹配流程预设
+        var savedNames = savedFlow.map(function(s){ return s.name; }).join(',');
+        for (var i = 0; i < _TPL_FLOWS.length; i++) {
+            var flowNames = _TPL_FLOWS[i].stages.map(function(s){ return s.name; }).join(',');
+            if (savedNames === flowNames) {
+                document.getElementById('tpl-stage-flow-preset').value = String(i);
+                // 同步阶段下拉
+                var stageSelect = document.getElementById('tpl-stage-select');
+                if (stageSelect) {
+                    var curVal = stageSelect.value;
+                    stageSelect.innerHTML = '';
+                    _TPL_FLOWS[i].stages.forEach(function(s) {
+                        var opt = document.createElement('option');
+                        opt.value = s.name; opt.textContent = s.name;
+                        if (s.name === curVal) opt.selected = true;
+                        stageSelect.appendChild(opt);
+                    });
+                    var cancelOpt = document.createElement('option');
+                    cancelOpt.value = '退单'; cancelOpt.textContent = '退单';
+                    if (curVal === '退单') cancelOpt.selected = true;
+                    stageSelect.appendChild(cancelOpt);
+                }
+                break;
+            }
+        }
+    } catch(e) {}
+})();
+{% endif %}
+</script>

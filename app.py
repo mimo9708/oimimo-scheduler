@@ -1,7 +1,7 @@
 """排单工具 — V2 开发版"""
 
 from datetime import date, datetime
-from flask import Flask, render_template, request, redirect, url_for, jsonify, send_from_directory
+from flask import Flask, render_template, request, redirect, url_for, jsonify, send_from_directory, make_response
 from flask_cors import CORS
 import os
 import re
@@ -86,7 +86,7 @@ UPLOAD_ORDERS_DIR = os.path.join(UPLOAD_DIR, 'orders')
 # ═══════════════════════════════════════════════════════════
 
 # #41 当前应用版本（发版时与上传版 CHANGELOG/installer.iss/git tag 保持一致）
-APP_VERSION = '1.2.0'
+APP_VERSION = '1.3.0'
 # #41 上传版 GitHub 仓库（前端直连其 Releases API 检测新版本）
 GITHUB_REPO = 'mimo9708/oimimo-scheduler'
 
@@ -342,6 +342,7 @@ def inject_constants():
         or {'米画师', 'B站工坊', '画加'}
     return {
         'STAGE_CHOICES': db.get_choices('stage'),
+        'STAGE_FLOWS': db.get_stage_flows(),  # Spec12 阶段流程预设（表单下拉/编辑器用）
         'SOURCE_CHOICES': source_list,
         'DDL_CHOICES': db.get_choices('ddl'),
         'PAYMENT_CHOICES': db.get_choices('payment'),
@@ -355,6 +356,8 @@ def inject_constants():
         'SHORTCUT_LABELS': SHORTCUT_LABELS,
         'APP_VERSION': APP_VERSION,
         'GITHUB_REPO': GITHUB_REPO,
+        # P20c：时薪功能全局保险丝（'1'/'0'，缺省视为开）
+        'hourly_rate_enabled': settings.get('hourly_rate_enabled', '1') == '1',
     }
 
 
@@ -395,6 +398,15 @@ def income_dashboard():
     cumulative = db.get_cumulative_annual_income(year=year)
     distribution = db.get_commission_type_distribution(year=year)
     top_customers = db.get_top_customers(limit=10)
+    # P20d：时薪统计四组数据（开关关闭时传 None，模板整块不渲染）
+    settings = db.get_all_settings()
+    hourly_enabled = settings.get('hourly_rate_enabled', '1') == '1'
+    hourly_summary = hourly_trend = hourly_by_type = hourly_by_source = None
+    if hourly_enabled:
+        hourly_summary = db.get_hourly_rate_summary(year=year)
+        hourly_trend = db.get_monthly_hourly_trend(year=year)
+        hourly_by_type = db.get_hourly_by_commission_type(year=year)
+        hourly_by_source = db.get_hourly_by_source(year=year)
     return render_template('income.html',
                            selected_year=year,
                            available_years=years,
@@ -403,7 +415,13 @@ def income_dashboard():
                            cumulative_income=cumulative,
                            type_distribution=distribution,
                            commission_colors=db.get_merged_palette('commission'),  # #43：品类甜甜圈与日历着色同源
-                           top_customers=top_customers)
+                           source_colors=db.get_merged_palette('source'),  # 来源时薪图与着色来源颜色同步
+                           top_customers=top_customers,
+                           income_layout=settings.get('income_layout', ''),  # P21a 自定义布局（空串=用模板默认）
+                           hourly_summary=hourly_summary,
+                           hourly_trend=hourly_trend,
+                           hourly_by_type=hourly_by_type,
+                           hourly_by_source=hourly_by_source)
 
 
 @app.route('/api/income/type-distribution')
@@ -415,6 +433,56 @@ def api_type_distribution():
     month = int(month_str) if month_str.isdigit() else None
     distribution = db.get_commission_type_distribution(year=year, month=month)
     return jsonify(distribution)
+
+
+@app.route('/api/income/hourly-type-distribution')
+def api_hourly_type_distribution():
+    """P20d：时薪×稿件类别分布 AJAX 接口 — 按 year/month 筛选"""
+    year_str = request.args.get('year', '')
+    year = int(year_str) if year_str.isdigit() else date.today().year
+    month_str = request.args.get('month', '')
+    month = int(month_str) if month_str.isdigit() else None
+    return jsonify(db.get_hourly_by_commission_type(year=year, month=month))
+
+
+@app.route('/api/quote-suggestion')
+def api_quote_suggestion():
+    """P20d：报价建议条 — 依据历史时薪样本 × 预计工时给出建议价与 P25~P75 区间。
+
+    无样本 / 开关关闭 / 预计工时无效 → 返回空串（报价条容器保持空白）。
+    """
+    if db.get_all_settings().get('hourly_rate_enabled', '1') != '1':
+        return ''
+    try:
+        est_hours = float(request.args.get('estimated_hours') or 0)
+    except (TypeError, ValueError):
+        return ''
+    if est_hours <= 0:
+        return ''
+    ctype = (request.args.get('commission_type') or '').strip()
+    sample = db.get_quote_sample(ctype or None)
+    if not sample:
+        return ''
+    rates = sample['rates']  # 已升序
+    n = len(rates)
+
+    def _pct(p):
+        return rates[min(n - 1, max(0, round(p * (n - 1))))]
+
+    suggest = round(sample['rate'] * est_hours)
+    low = round(_pct(0.25) * est_hours)
+    high = round(_pct(0.75) * est_hours)
+    scope_note = '同类别'
+    return (
+        '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;'
+        'padding:6px 10px;border-radius:var(--radius-sm);'
+        'background:color-mix(in srgb, var(--color-info) 8%, transparent);'
+        'font-size:0.82rem;color:var(--color-text-secondary);">'
+        f'<span>💡 参考报价 ¥{suggest}（区间 ¥{low}~¥{high}，基于{scope_note}{sample["count"]}单）</span>'
+        f'<button type="button" class="btn btn-sm" style="padding:2px 10px;font-size:0.78rem;" '
+        f'onclick="applyQuoteSuggestion(this, {suggest})">采用</button>'
+        '</div>'
+    )
 
 
 @app.route('/calendar')
@@ -440,6 +508,7 @@ def orders_list():
         'stage': request.args.get('stage'),
         'source': request.args.get('source'),
         'status': request.args.get('status'),
+        'commission_type': request.args.get('commission_type'),
         'search': request.args.get('search'),
         'archived': request.args.get('archived', '0') == '1',
         'page': _safe_int(request.args.get('page'), 1),
@@ -483,6 +552,7 @@ def kanban_view():
     stages = db.get_choices('stage')
     columns = {stage: [] for stage in stages}
     for o in orders:
+        _inject_stage_flow_parsed(o)  # Spec12：看板卡片需要快照阶段
         stage = o['current_stage']
         if stage in columns:
             columns[stage].append(o)
@@ -495,6 +565,7 @@ def order_detail(order_id):
     if not order:
         return "订单不存在", 404
     _calc_pct_for_display(order)
+    _inject_stage_flow_parsed(order)
     customer = db.get_customer(order['customer_id']) if order['customer_id'] else None
     images = db.get_order_images(order_id)
     return render_template('orders/detail.html', order=order, customer=customer, images=images)
@@ -536,6 +607,15 @@ def _calc_pct_for_display(order):
         order['platform_fee_pct'] = round(order['platform_fee'] / order['income'] * 100, 1)
     else:
         order['platform_fee_pct'] = 0.0
+
+
+def _inject_stage_flow_parsed(order):
+    """Spec12：为模板注入 _stage_flow_parsed（本单阶段快照列表）。
+    时间轴宏直接读取该键渲染；不修改 orders.stage_flow 原值。
+    """
+    if order is not None:
+        order['_stage_flow_parsed'] = db.get_order_stage_flow(order)
+    return order
 
 
 @app.route('/orders/new')
@@ -620,6 +700,7 @@ def order_edit(order_id):
     if not order:
         return "订单不存在", 404
     _calc_pct_for_display(order)
+    _inject_stage_flow_parsed(order)
     customers = db.list_customers()
     sources, types = _get_existing_values()
     inline = request.args.get('inline') == '1'
@@ -739,6 +820,30 @@ def _needs_overdue_archive_confirm(order):
         return False
 
 
+def _needs_work_hours_prompt(order):
+    """P20d：订单进入完成终态（非退单）且开关开、未录工时、未排除统计 → 弹补录工时窗。
+
+    双路径共用：看板/快速切换 stage 端点 + 编辑表单 inline 保存。
+    """
+    if not order:
+        return False
+    try:
+        enabled = db.get_all_settings().get('hourly_rate_enabled', '1') == '1'
+    except Exception as e:
+        logging.error("_needs_work_hours_prompt: 读取设置失败 %s", e)
+        return False
+    if not enabled:
+        return False
+    stage = order.get('current_stage') or ''
+    if not db.is_terminal_stage(stage) or db.is_refund_stage(stage):
+        return False
+    if order.get('work_hours'):
+        return False
+    if order.get('exclude_hourly'):
+        return False
+    return True
+
+
 @app.post('/orders')
 def create_order():
     form_data = dict(request.form)
@@ -749,6 +854,14 @@ def create_order():
     # platform_fee_pct 空字符串 → None
     if form_data.get('platform_fee_pct', '').strip() == '':
         form_data['platform_fee_pct'] = None
+    # Spec12：先单独解析/校验 stage_flow（JSON 字符串），失败立即 400
+    stage_flow_raw = form_data.get('stage_flow')
+    try:
+        stage_flow_json = db.parse_stage_flow_from_form(stage_flow_raw)
+    except ValueError as e:
+        return f"阶段流程校验失败: {e}", 400
+    # 校验通过的 JSON 字符串回填到 form_data；未传/空串时为 None → db 层用默认流程
+    form_data['stage_flow'] = stage_flow_json
     # 不从前端接收 is_repeat / repeat_count（后台自动算）
     form_data.pop('is_repeat', None)
     form_data.pop('repeat_count', None)
@@ -801,6 +914,16 @@ def update_order(order_id):
     # platform_fee_pct 空字符串 → None
     if form_data.get('platform_fee_pct', '').strip() == '':
         form_data['platform_fee_pct'] = None
+    # Spec12：先单独解析/校验 stage_flow（JSON 字符串），失败立即 400
+    # 与 create_order 区别：前端可能不传 stage_flow（表示不修改）→ 保持 form_data 不含该键
+    if 'stage_flow' in form_data:
+        stage_flow_raw = form_data.pop('stage_flow')
+        try:
+            stage_flow_json = db.parse_stage_flow_from_form(stage_flow_raw)
+        except ValueError as e:
+            return f"阶段流程校验失败: {e}", 400
+        # 回填规范化后的 JSON；空串时 stage_flow_json=None → db 层把快照清空（回退默认流程）
+        form_data['stage_flow'] = stage_flow_json
     # 不从前端接收 is_repeat / repeat_count
     form_data.pop('is_repeat', None)
     form_data.pop('repeat_count', None)
@@ -818,8 +941,9 @@ def update_order(order_id):
     else:
         data.pop('is_archived', None)
 
-    # 移除 None 值，但保留 customer_id / platform_fee_pct（None 表示清空/无手续费，需传到 db 层）
-    data = {k: v for k, v in data.items() if v is not None or k in ('customer_id', 'platform_fee_pct')}
+    # 移除 None 值，但保留 customer_id / platform_fee_pct / stage_flow
+    # （None 表示清空/无手续费/清空流程快照，需传到 db 层；其他 None 字段视为未传）
+    data = {k: v for k, v in data.items() if v is not None or k in ('customer_id', 'platform_fee_pct', 'stage_flow')}
 
     db.update_order(order_id, data)
 
@@ -830,11 +954,14 @@ def update_order(order_id):
     # 如果是内联编辑，返回刷新触发器
     if is_inline:
         resp = jsonify({'success': True, 'order_id': order_id})
-        if needs_confirm:
-            # 携带 archiveConfirm 让前端在抽屉关闭后打开归档确认
-            resp.headers['HX-Trigger'] = json.dumps({'orderUpdated': {'archiveConfirm': order_id}})
-        else:
-            resp.headers['HX-Trigger'] = 'orderUpdated'
+        # P20d：完成终态未录工时 → 先弹补录窗；promptWorkHours 放第一个 key，
+        # 其监听器先执行设 flag，orderUpdated 的归档确认链由前端串行接续（不并发）
+        triggers = {}
+        if _needs_work_hours_prompt(saved):
+            triggers['promptWorkHours'] = {'id': order_id, 'name': saved.get('project_name') or ''}
+        # 携带 archiveConfirm 让前端在抽屉关闭后打开归档确认
+        triggers['orderUpdated'] = {'archiveConfirm': order_id} if needs_confirm else {}
+        resp.headers['HX-Trigger'] = json.dumps(triggers)
         return resp
 
     # 如果是模态框编辑，关闭弹窗并刷新
@@ -922,20 +1049,81 @@ def _archive_done_response(order_id):
 @app.post('/orders/<int:order_id>/stage')
 def update_order_stage(order_id):
     new_stage = request.form['stage']
-    if new_stage not in db.get_choices('stage'):
-        return jsonify({'error': f'无效阶段: {new_stage}'}), 400
-    db.update_stage(order_id, new_stage)
     order = db.get_order(order_id)
     if not order:
         return jsonify({'error': '订单不存在'}), 404
-    return render_template('partials/kanban_card.html', order=order)
+    # Spec12：校验「本单快照阶段 + 退单」，而非全局 stage 选择列表
+    # （自定义阶段名只在该订单快照中有效；快照外阶段拒绝，避免跨流程误切）
+    allowed = set(db.get_order_stage_names(order)) | {db.get_refund_stage()}
+    if new_stage not in allowed:
+        return jsonify({'error': f'阶段「{new_stage}」不在本单流程中，请先在编辑页修改流程'}), 400
+    db.update_stage(order_id, new_stage)
+    order = db.get_order(order_id)
+    resp = make_response(render_template('partials/kanban_card.html', order=order))
+    # P20d：切到完成终态且未录工时 → 前端弹补录窗（看板走原生 fetch，需手动解析该头）
+    if _needs_work_hours_prompt(order):
+        resp.headers['HX-Trigger'] = json.dumps(
+            {'promptWorkHours': {'id': order_id, 'name': order.get('project_name') or ''}})
+    return resp
+
+
+@app.route('/orders/<int:order_id>/work-hours', methods=['GET', 'POST'])
+def order_work_hours(order_id):
+    """P20d：完成补录工时弹窗。GET 渲染弹窗，POST 落库（action=save/exclude）。"""
+    order = db.get_order(order_id)
+    if not order:
+        return jsonify({'error': '订单不存在'}), 404
+    if request.method == 'GET':
+        return render_template('partials/work_hours_prompt.html', order=order)
+
+    action = request.form.get('action', 'save')
+    if action == 'exclude':
+        db.set_order_exclude_hourly(order_id)
+        msg = '已设为不参与时薪统计'
+    else:
+        try:
+            hours = float(request.form.get('work_hours') or 0)
+        except (TypeError, ValueError):
+            return '<p style="color:var(--color-danger);">工时格式无效，请输入数字</p>', 400
+        if hours <= 0 or hours > 10000:
+            return '<p style="color:var(--color-danger);">工时需在 0~10000 小时之间</p>', 400
+        db.update_order_work_hours(order_id, hours)
+        msg = f'已记录工时 {hours:g} 小时'
+    return (
+        '<div style="text-align:center;padding:24px 8px;">'
+        f'<div style="font-size:2rem;">✓</div><p>{msg}</p></div>'
+        '<script>setTimeout(function(){closeCenterModal();}, 600);</script>'
+    )
+
+
+def _normalize_sched_dt(value):
+    """#52：规范化日历/甘特图拖拽传来的排期时间串。
+
+    甘特图 on_date_change 把 Date 对象 JSON.stringify 成 UTC ISO 串
+    （如 2026-08-02T16:00:00.000Z），日历非全天事件带 +08:00 偏移，
+    这类值入库后编辑表单的 datetime-local 输入框无法渲染（显示空白）。
+    统一转本地时间：整天边界（00:00 / 23:59）输出 YYYY-MM-DD，
+    其余输出 YYYY-MM-DDTHH:MM；解析失败原样返回并记日志。
+    """
+    if not value or 'T' not in value:
+        return value
+    try:
+        dt = datetime.fromisoformat(value.replace('Z', '+00:00'))
+    except ValueError:
+        logging.error('reschedule: 无法解析排期时间 %r', value)
+        return value
+    if dt.tzinfo is not None:
+        dt = dt.astimezone().replace(tzinfo=None)
+    if (dt.hour, dt.minute) in ((0, 0), (23, 59)):
+        return dt.strftime('%Y-%m-%d')
+    return dt.strftime('%Y-%m-%dT%H:%M')
 
 
 @app.post('/orders/<int:order_id>/reschedule')
 def reschedule_order(order_id):
     data = request.get_json()
-    start = data.get('start', '')
-    end = data.get('end', start)
+    start = _normalize_sched_dt(data.get('start', ''))
+    end = _normalize_sched_dt(data.get('end', start))
     db.reschedule_order(order_id, start, end)
     return jsonify({'success': True})
 
@@ -973,12 +1161,15 @@ def batch_update_orders():
         return jsonify({'success': False, 'error': '无效的ID列表'}), 400
 
     count = 0
+    skipped = 0
     try:
         if action == 'stage':
-            # #40 P3：与单条 stage 路由同样校验，非法值返 400 而非静默成功
-            if value not in db.get_choices('stage'):
-                return jsonify({'success': False, 'error': f'无效阶段: {value}'}), 400
-            count = db.batch_update_stage(ids, value)              # P19-F5 整批单事务
+            # Spec12：value 必须是「被选订单快照 + 退单」中的有效阶段；
+            # 具体跳过逻辑由 db.batch_update_stage 按每单快照判定，此处仅做非空校验
+            if not value:
+                return jsonify({'success': False, 'error': '未指定阶段'}), 400
+            result = db.batch_update_stage(ids, value)              # P19-F5 整批单事务
+            count, skipped = result['count'], result['skipped']
         elif action == 'archive':
             count = db.batch_set_archived(ids, value == '1')       # P19-F1 唯一入口 + F5 单事务
         elif action == 'delete':
@@ -999,7 +1190,12 @@ def batch_update_orders():
     except Exception as e:
         return jsonify({'success': False, 'error': f'批量操作失败已回滚: {e}'}), 500
 
-    return jsonify({'success': True, 'count': count})
+    resp = {'success': True, 'count': count}
+    if skipped:
+        resp['skipped'] = skipped
+        resp['skip_ids'] = result.get('skip_ids', [])
+        resp['warning'] = f'已更新 {count} 单，{skipped} 单因流程中无该阶段已跳过'
+    return jsonify(resp)
 
 
 @app.post('/customers')
@@ -1246,6 +1442,7 @@ def api_orders():
         'stage': request.args.get('stage'),
         'source': request.args.get('source'),
         'status': request.args.get('status'),
+        'commission_type': request.args.get('commission_type'),
         'search': request.args.get('search'),
         'end_from': request.args.get('end_from'),  # P16e 结束时间范围（起）
         'end_to': request.args.get('end_to'),      # P16e 结束时间范围（止）
@@ -1479,11 +1676,23 @@ def settings_page():
 
     # #42：source/commission 是可自定义列表，色板行改为遍历实际 choices（含自定义项），
     # 默认色从 CALENDAR_PALETTES 取，取不到兜底灰（与 get_orders_for_calendar 的 default_color 一致）
-    # #45 R2：stage 同法——自定义新增阶段也进面板，默认灰，改色后存 cal_stage_<名>
+    # #45 R2：stage 着色面板只显示流程中的活跃阶段（不含 orders 表历史遗留的孤儿阶段）
+    # 收集所有流程中的阶段名 + 系统终态（已完成/已取消）
+    _flow_stage_seen, _flow_stages = set(), []
+    for _flow in db.get_stage_flows():
+        for _s in _flow.get('stages', []):
+            _n = _s.get('name', '') if isinstance(_s, dict) else ''
+            if _n and _n not in _flow_stage_seen:
+                _flow_stage_seen.add(_n)
+                _flow_stages.append(_n)
+    # 系统终态阶段始终保留（即使不在任何流程中）—— 使用动态名称而非硬编码
+    for _sys in (db.get_done_stage(), db.get_refund_stage()):
+        if _sys not in _flow_stage_seen:
+            _flow_stages.append(_sys)
     custom_mode_labels = {
         'source': db.get_choices('source'),
         'commission': db.get_choices('commission_type'),
-        'stage': db.get_choices('stage'),
+        'stage': _flow_stages,
     }
 
     cal_palettes = {}
@@ -1534,7 +1743,12 @@ def settings_page():
                            platform_sources=platform_sources,
                            font_size=font_size,
                            font_family=font_family,
-                           all_settings=all_settings)
+                           all_settings=all_settings,
+                           db_path=db.DB_PATH,
+                           data_recovery_needed=db.check_data_recovery_needed(),
+                           backup_dir=db.get_backup_dir(),
+                           default_backup_dir=db.DEFAULT_BACKUP_DIR,
+                           backup_count=len(db.get_backup_list()))
 
 
 @app.post('/settings')
@@ -1563,6 +1777,55 @@ def save_settings():
     return redirect(url_for('settings_page'))
 
 
+@app.post('/settings/commission-merge')
+def merge_commission_types_route():
+    """类别合并：将多个旧类别统一为新名称，同步更新订单 + 设置列表 + 颜色配置。"""
+    data = request.get_json(silent=True) or {}
+    old_names = data.get('old_names', [])
+    new_name = (data.get('new_name') or '').strip()
+    if not old_names or not new_name:
+        return jsonify({'success': False, 'error': '请选择要合并的类别并输入目标名称'}), 400
+    if len(old_names) < 2:
+        return jsonify({'success': False, 'error': '至少选择 2 个类别才能合并'}), 400
+    try:
+        result = db.merge_commission_types(old_names, new_name)
+    except Exception as e:
+        logging.error('类别合并失败: %s', e)
+        return jsonify({'success': False, 'error': str(e)}), 500
+    return jsonify({
+        'success': True,
+        'message': f'已将 {result["total"]} 单合并为「{new_name}」',
+        'merged': result['merged'],
+    })
+
+
+@app.post('/settings/stage-flows')
+def save_stage_flows_route():
+    """Spec12：保存阶段流程预设（JSON body）。成功返回 200 + Toast，失败返回 400。"""
+    # 优先取 JSON body；为兼容 HTMX form fallback 也读 request.form['flows']（前端可任选）
+    if request.is_json:
+        flows = request.get_json(silent=True) or []
+    else:
+        raw = request.form.get('flows', '')
+        try:
+            flows = json.loads(raw) if raw else []
+        except Exception:
+            flows = None
+    if not isinstance(flows, list):
+        return jsonify({'error': 'flows 必须是数组'}), 400
+    if not flows:
+        return jsonify({'error': '至少需要一条流程'}), 400
+    try:
+        db.save_stage_flows(flows)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        return jsonify({'error': f'保存失败: {e}'}), 500
+    resp = jsonify({'success': True, 'count': len(flows)})
+    resp.headers['HX-Trigger'] = json.dumps({'showToast': f'已保存 {len(flows)} 条流程预设（仅影响之后创建的订单）'})
+    return resp
+
+
 def _sync_choices_to_orders(data, settings_key, order_field):
     """兼容包装（P19-F5 起实现迁移至 db.sync_choice_renames；请优先在事务中调用后者）"""
     with db.transaction() as conn:
@@ -1582,6 +1845,99 @@ def save_color_mode():
     if mode in ('source', 'stage', 'ddl', 'payment', 'commission'):
         db.update_settings({'calendar_color_mode': mode})
     return ('', 204)
+
+
+# ── P21a 收入页自定义布局（微端点：同样避开 save_settings 对 platform_sources 的重写） ──
+@app.post('/settings/income-layout')
+def save_income_layout():
+    raw = (request.form.get('layout') or '').strip()
+    if raw == '':
+        db.update_settings({'income_layout': ''})   # 空串 = 重置回模板默认
+        return ('', 204)
+    if len(raw) > 8000:
+        return ('layout too large', 400)
+    try:
+        nodes = json.loads(raw)
+    except ValueError:
+        logging.error('P21a 布局保存失败：非法 JSON（长度 %d）', len(raw))
+        return ('invalid json', 400)
+    if not isinstance(nodes, list) or not nodes:
+        return ('invalid layout', 400)
+    clean = []
+    for n in nodes:
+        if not isinstance(n, dict):
+            continue
+        bid = str(n.get('id') or '').strip()
+        if not bid or len(bid) > 40:
+            continue
+        try:
+            clean.append({
+                'id': bid,
+                'x': max(0, min(11, int(n.get('x') or 0))),
+                'y': max(0, min(999, int(n.get('y') or 0))),
+                'w': max(1, min(12, int(n.get('w') or 1))),
+                'h': max(1, min(200, int(n.get('h') or 1))),
+            })
+        except (TypeError, ValueError):
+            continue
+    if not clean:
+        return ('invalid layout', 400)
+    db.update_settings({'income_layout': json.dumps(clean, ensure_ascii=False)})
+    return ('', 204)
+
+
+# ── P22b 数据备份管理（微端点：JSON 响应，页面 fetch 直读） ──
+@app.get('/settings/backups')
+def get_backups():
+    try:
+        return jsonify({'success': True, 'backups': db.get_backup_list()})
+    except Exception as e:
+        logging.error('获取备份列表失败: %s', e)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.post('/settings/backup')
+def create_backup():
+    try:
+        ok, msg = db.create_manual_backup()
+        if ok:
+            return jsonify({'success': True, 'message': msg})
+        return jsonify({'success': False, 'error': msg}), 500
+    except Exception as e:
+        logging.error('创建备份失败: %s', e)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.post('/settings/backup-dir')
+def save_backup_dir():
+    """设置备份目录：校验路径存在且可写，保存到 settings 表。"""
+    path = (request.form.get('path') or '').strip()
+    ok, msg = db.set_backup_dir(path)
+    return jsonify({'success': ok, 'message': msg})
+
+
+@app.post('/settings/restore/<filename>')
+def restore_backup_route(filename):
+    try:
+        ok, msg = db.restore_backup(filename)
+        if ok:
+            return jsonify({'success': True, 'message': msg})
+        return jsonify({'success': False, 'error': msg}), 500
+    except Exception as e:
+        logging.error('恢复备份失败: %s', e)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.post('/settings/backup/delete/<filename>')
+def delete_backup_route(filename):
+    try:
+        ok, msg = db.delete_backup(filename)
+        if ok:
+            return jsonify({'success': True, 'message': msg})
+        return jsonify({'success': False, 'error': msg}), 400
+    except Exception as e:
+        logging.error('删除备份失败: %s', e)
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 # ── P16j 自定义主题：导入 / 选用 / 删除 ──

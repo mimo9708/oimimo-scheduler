@@ -1,0 +1,32 @@
+{# P20c：工时字段 partial —— 四套表单共用（form_modal 无 order 变量，需双重容错） #}
+{% if hourly_rate_enabled %}
+{% set _o = order if order is defined and order else None %}
+<div class="schedule-group" style="margin-top:var(--space-md);">
+    <div class="schedule-group-title">工时信息</div>
+    <div class="form-row">
+        <div class="form-group">
+            <label>预估工时 (h)</label>
+            <input type="number" name="estimated_hours" step="0.5" min="0" placeholder="如 8"
+                   value="{{ _o.estimated_hours if _o and _o.estimated_hours is not none else '' }}">
+        </div>
+        <div class="form-group">
+            <label>实际工时 (h)</label>
+            <input type="number" name="work_hours" step="0.5" min="0" placeholder="完成后填写"
+                   value="{{ _o.work_hours if _o and _o.work_hours is not none else '' }}">
+        </div>
+    </div>
+    <label style="display:flex;align-items:center;gap:6px;font-weight:normal;cursor:pointer;font-size:0.82rem;margin-top:var(--space-sm);">
+        <input type="checkbox" name="exclude_hourly" value="1" style="width:auto;"
+               {% if _o and _o.exclude_hourly %}checked{% endif %}>
+        此订单不参与时薪统计
+    </label>
+    {# 报价建议条容器（数据联调见卡66 /api/quote-suggestion） #}
+    <div class="quote-suggestion-bar"
+         hx-get="/api/quote-suggestion"
+         hx-target="this"
+         hx-include="closest form"
+         hx-trigger="change from:[name='commission_type'], change from:[name='estimated_hours'], change from:[name='platform_fee_pct']"
+         hx-swap="innerHTML"
+         style="margin-top:var(--space-sm);font-size:0.78rem;color:var(--color-text-secondary);"></div>
+</div>
+{% endif %}

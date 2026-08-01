@@ -4,6 +4,9 @@
 {% block head_extra %}
     <!-- Chart.js（仅收入看板图表） -->
     <script src="{{ url_for('static', filename='vendor/chart.min.js') }}"></script>
+    <!-- P21a gridstack（仅收入看板自定义布局；加载失败时页面退化为顺序块流） -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='vendor/gridstack.min.css') }}">
+    <script src="{{ url_for('static', filename='vendor/gridstack-all.js') }}"></script>
 {% endblock %}
 
 {% block content %}
@@ -21,6 +24,11 @@
                 <option value="{{ y }}" {% if y == selected_year %}selected{% endif %}>{{ y }} 年</option>
                 {% endfor %}
             </select>
+            <!-- P21a 自定义布局入口（gridstack 未加载时 JS 会自动隐藏） -->
+            <button class="btn btn-sm btn-ghost" id="layout-reset-btn" onclick="resetIncomeLayout()"
+                    title="恢复默认布局" style="display:none;">重置</button>
+            <button class="btn btn-sm btn-secondary" id="layout-edit-btn" onclick="toggleIncomeLayoutEdit()"
+                    title="拖拽换位 · 拖右下角缩放" style="display:none;">布局</button>
             <!-- P16h 模块设置入口 -->
             <div class="module-settings-wrap">
                 <button class="btn btn-sm btn-secondary" id="module-settings-btn" onclick="toggleModuleSettings()" title="自定义显示模块"> 模块</button>
@@ -31,15 +39,23 @@
 
     {# P16c 已移除：本月收入/年收入/待收预估统计模块（原 stats-grid 三张 stat-card，连同空容器一并删除）。#}
 
-    <!-- 图表行 1 -->
-    <div class="charts-grid" data-module="charts-row1" data-module-title="月度收入 / 品类分布">
-        <div class="card">
+    <!-- ═══ P21a 自定义布局网格（gridstack 接管；未初始化时退化为顺序块流） ═══ -->
+    <div class="dash-grid" id="income-grid" data-layout="{{ income_layout }}">
+
+    <!-- 图表行 1（P20e：data-module 从行下沉到块，P21a 起每块独立 widget） -->
+    <div class="grid-stack-item" gs-id="monthly-stats" gs-x="0" gs-y="0" gs-w="7" gs-h="22" gs-min-w="3" gs-min-h="2">
+      <div class="grid-stack-item-content">
+        <section class="card dash-block" data-block-id="monthly-stats" data-module="monthly-stats" data-module-title="月度收入统计">
             <div class="card-header">
                 <span class="hint" title="按排期月份 · 净额">月度收入统计（已完成）</span>
             </div>
             <div class="card-body"><div class="chart-container" style="cursor:pointer;"><canvas id="monthly-stats-chart"></canvas></div></div>
-        </div>
-        <div class="card">
+        </section>
+      </div>
+    </div>
+    <div class="grid-stack-item" gs-id="type-distribution" gs-x="7" gs-y="0" gs-w="5" gs-h="22" gs-min-w="3" gs-min-h="2">
+      <div class="grid-stack-item-content">
+        <section class="card dash-block" data-block-id="type-distribution" data-module="type-distribution" data-module-title="品类分布">
             <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;">
                 <span class="hint" title="已完成订单 · 悬停看应收(毛)/实收(净)">品类分布</span>
                 <select id="type-month-filter" style="padding:4px 8px;border:1px solid var(--color-border);border-radius:var(--radius-sm);font-size:0.78rem;background:var(--color-surface);cursor:pointer;">
@@ -50,18 +66,24 @@
                 </select>
             </div>
             <div class="card-body"><div class="chart-container" style="max-height:300px;"><canvas id="type-chart"></canvas></div></div>
-        </div>
+        </section>
+      </div>
     </div>
 
     <!-- 图表行 2：预计收入 + 客户排名 -->
-    <div class="charts-grid" data-module="charts-row2" data-module-title="预计收入 / 客户排名">
-        <div class="card">
+    <div class="grid-stack-item" gs-id="projected" gs-x="0" gs-y="22" gs-w="7" gs-h="23" gs-min-w="3" gs-min-h="2">
+      <div class="grid-stack-item-content">
+        <section class="card dash-block" data-block-id="projected" data-module="projected" data-module-title="每月预计收入">
             <div class="card-header">
                 <span class="hint" title="按排期月份 · 净额">每月预计收入（进行中）</span>
             </div>
             <div class="card-body"><div class="chart-container" style="cursor:pointer;"><canvas id="projected-chart"></canvas></div></div>
-        </div>
-        <div class="card">
+        </section>
+      </div>
+    </div>
+    <div class="grid-stack-item" gs-id="top-customers" gs-x="7" gs-y="22" gs-w="5" gs-h="23" gs-min-w="3" gs-min-h="2">
+      <div class="grid-stack-item-content">
+        <section class="card dash-block" data-block-id="top-customers" data-module="top-customers" data-module-title="客户消费排名">
             <div class="card-header"><span class="hint" title="仅统计已归档+已完成+已结算订单的实收金额">客户消费排名</span></div>
             <div class="card-body" style="padding:0;">
                 {% if top_customers %}
@@ -82,16 +104,86 @@
                 </div>
                 {% endif %}
             </div>
-        </div>
+        </section>
+      </div>
     </div>
 
     <!-- 年收入累进（全宽） -->
-    <div class="card" style="margin-bottom:var(--space-md);" data-module="cumulative" data-module-title="年收入累进">
-        <div class="card-header">
-            <span>{{ selected_year }}年收入累进</span>
-        </div>
-        <div class="card-body"><div class="chart-container" style="max-height:340px;"><canvas id="cumulative-chart"></canvas></div></div>
+    <div class="grid-stack-item" gs-id="cumulative" gs-x="0" gs-y="45" gs-w="12" gs-h="22" gs-min-w="3" gs-min-h="2">
+      <div class="grid-stack-item-content">
+        <section class="card dash-block" data-block-id="cumulative" data-module="cumulative" data-module-title="年收入累进">
+            <div class="card-header">
+                <span>{{ selected_year }}年收入累进</span>
+            </div>
+            <div class="card-body"><div class="chart-container" style="max-height:340px;"><canvas id="cumulative-chart"></canvas></div></div>
+        </section>
+      </div>
     </div>
+
+    {% if hourly_summary %}
+    <!-- ═══ P20e 时薪区块（开关关闭时整组不渲染） ═══ -->
+
+    <!-- 时薪统计卡（3 卡合 1 块） -->
+    <div class="grid-stack-item" gs-id="hourly-cards" gs-x="0" gs-y="67" gs-w="12" gs-h="7" gs-min-w="3" gs-min-h="2">
+      <div class="grid-stack-item-content">
+        <section class="dash-block" data-block-id="hourly-cards" data-module="hourly-cards" data-module-title="时薪统计">
+        <div class="stats-grid">
+            <div class="stat-card stat-card-clickable"
+                 onclick="openReceipt('income', '{{ selected_year }}年完成单明细', null, {year: {{ selected_year }}, from: '{{ selected_year }}-01-01', to: '{{ selected_year }}-12-31'})">
+                <div class="stat-card-label"><span class="hint" title="{{ selected_year }}年完成单 · 实收÷工时加权">年平均时薪</span></div>
+                <div class="stat-card-value">{% if hourly_summary.year_rate is not none %}¥{{ "%.0f"|format(hourly_summary.year_rate) }}/h{% else %}—{% endif %}</div>
+                <div class="stat-card-label">{{ selected_year }} 年</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-card-label"><span class="hint" title="计算范围：{{ selected_year }}年已填工时的完成单 · (实际工时−预估工时)÷预估工时 · 正值=超时">平均预估偏差</span></div>
+                <div class="stat-card-value">{% if hourly_summary.avg_bias is not none %}{{ "%+.0f"|format(hourly_summary.avg_bias * 100) }}%{% else %}—{% endif %}</div>
+                <div class="stat-card-label">实际 vs 预估工时</div>
+            </div>
+        </div>
+        </section>
+      </div>
+    </div>
+
+    <!-- 月度时薪趋势（全宽） -->
+    <div class="grid-stack-item" gs-id="hourly-trend" gs-x="0" gs-y="74" gs-w="12" gs-h="22" gs-min-w="3" gs-min-h="2">
+      <div class="grid-stack-item-content">
+        <section class="card dash-block" data-block-id="hourly-trend" data-module="hourly-trend" data-module-title="月度时薪趋势">
+        <div class="card-header">
+            <span class="hint" title="按排期月份 · 加权时薪 · 虚线为近3月滑动平均">{{ selected_year }}年月度时薪趋势</span>
+        </div>
+        <div class="card-body"><div class="chart-container" style="max-height:340px;cursor:pointer;"><canvas id="hourly-trend-chart"></canvas></div></div>
+        </section>
+      </div>
+    </div>
+
+    <!-- 品类 / 来源时薪 -->
+    <div class="grid-stack-item" gs-id="hourly-type" gs-x="0" gs-y="96" gs-w="7" gs-h="19" gs-min-w="3" gs-min-h="2">
+      <div class="grid-stack-item-content">
+        <section class="card dash-block" data-block-id="hourly-type" data-module="hourly-type" data-module-title="品类时薪">
+            <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;">
+                <span class="hint" title="完成单加权时薪 · 按品类">品类时薪</span>
+                <select id="hourly-type-month-filter" style="padding:4px 8px;border:1px solid var(--color-border);border-radius:var(--radius-sm);font-size:0.78rem;background:var(--color-surface);cursor:pointer;">
+                    <option value="">全年</option>
+                    {% for m in range(1, 13) %}
+                    <option value="{{ m }}">{{ m }}月</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="card-body"><div class="chart-container" style="max-height:300px;"><canvas id="hourly-type-chart"></canvas></div></div>
+        </section>
+      </div>
+    </div>
+    <div class="grid-stack-item" gs-id="hourly-source" gs-x="7" gs-y="96" gs-w="5" gs-h="19" gs-min-w="3" gs-min-h="2">
+      <div class="grid-stack-item-content">
+        <section class="card dash-block" data-block-id="hourly-source" data-module="hourly-source" data-module-title="来源时薪">
+            <div class="card-header"><span class="hint" title="完成单加权时薪 · 按来源">来源时薪</span></div>
+            <div class="card-body"><div class="chart-container" style="max-height:300px;"><canvas id="hourly-source-chart"></canvas></div></div>
+        </section>
+      </div>
+    </div>
+    {% endif %}
+
+    </div><!-- /.dash-grid -->
 
 </div>
 {% endblock %}
@@ -107,6 +199,8 @@ function updateParam(key, value) {
 
 (function() {
     var selectedYear = {{ selected_year }};
+    // P20a：主题样式件（金额 tooltip/ticks/数据标签统一自 app.js chartTheme）
+    var theme = chartTheme();
 
     // 图表点击处理：获取月份并打开小票
     function chartPointClick(metric, label) {
@@ -118,7 +212,7 @@ function updateParam(key, value) {
         };
     }
 
-    // 月度收入统计
+    // 月度收入统计（主色暂保留硬编码传入，见任务卡 63：保证首版零视觉回归）
     new Chart(document.getElementById('monthly-stats-chart').getContext('2d'), {
         type: 'line',
         data: {
@@ -136,28 +230,11 @@ function updateParam(key, value) {
             onClick: chartPointClick('monthly_income', '实收明细'),
             plugins: {
                 legend: { display: false },
-                tooltip: { callbacks: { label: function(ctx) { return '¥' + ctx.raw.toLocaleString(); } } }
+                tooltip: theme.moneyTooltip
             },
-            scales: { y: { beginAtZero: true, ticks: { callback: function(v) { return (v >= 10000) ? (v/10000).toFixed(1)+'w' : (v >= 1000 ? (v/1000).toFixed(1)+'k' : v); } } } }
+            scales: { y: { beginAtZero: true, ticks: theme.moneyTicks } }
         },
-        plugins: [{
-            id: 'datalabels',
-            afterDraw: function(chart) {
-                var ctx = chart.ctx;
-                chart.data.datasets.forEach(function(ds, i) {
-                    var meta = chart.getDatasetMeta(i);
-                    meta.data.forEach(function(pt, j) {
-                        var v = ds.data[j];
-                        if (v === 0) return;
-                        var label = v >= 10000 ? (v/10000).toFixed(1) + 'w' : (v >= 1000 ? (v/1000).toFixed(1) + 'k' : v);
-                        ctx.fillStyle = '#0b0b0b';
-                        ctx.font = '10px -apple-system, sans-serif';
-                        ctx.textAlign = 'center';
-                        ctx.fillText(label, pt.x, pt.y - 10);
-                    });
-                });
-            }
-        }]
+        plugins: [makeDatalabels()]
     });
 
     // 预计收入
@@ -179,28 +256,11 @@ function updateParam(key, value) {
             onClick: chartPointClick('monthly_projected', '预计收入明细'),
             plugins: {
                 legend: { display: false },
-                tooltip: { callbacks: { label: function(ctx) { return '¥' + ctx.raw.toLocaleString(); } } }
+                tooltip: theme.moneyTooltip
             },
-            scales: { y: { beginAtZero: true, ticks: { callback: function(v) { return (v >= 10000) ? (v/10000).toFixed(1)+'w' : (v >= 1000 ? (v/1000).toFixed(1)+'k' : v); } } } }
+            scales: { y: { beginAtZero: true, ticks: theme.moneyTicks } }
         },
-        plugins: [{
-            id: 'datalabels',
-            afterDraw: function(chart) {
-                var ctx = chart.ctx;
-                chart.data.datasets.forEach(function(ds, i) {
-                    var meta = chart.getDatasetMeta(i);
-                    meta.data.forEach(function(pt, j) {
-                        var v = ds.data[j];
-                        if (v === 0) return;
-                        var label = v >= 10000 ? (v/10000).toFixed(1) + 'w' : (v >= 1000 ? (v/1000).toFixed(1) + 'k' : v);
-                        ctx.fillStyle = '#0b0b0b';
-                        ctx.font = '10px -apple-system, sans-serif';
-                        ctx.textAlign = 'center';
-                        ctx.fillText(label, pt.x, pt.y - 10);
-                    });
-                });
-            }
-        }]
+        plugins: [makeDatalabels()]
     });
 
     // 年累进
@@ -220,48 +280,18 @@ function updateParam(key, value) {
             layout: { padding: { top: 16 } },
             plugins: {
                 legend: { display: false },
-                tooltip: { callbacks: { label: function(ctx) { return '¥' + ctx.raw.toLocaleString(); } } }
+                tooltip: theme.moneyTooltip
             },
-            scales: { y: { beginAtZero: true, ticks: { callback: function(v) { return (v >= 10000) ? (v/10000).toFixed(1)+'w' : (v >= 1000 ? (v/1000).toFixed(1)+'k' : v); } } } }
+            scales: { y: { beginAtZero: true, ticks: theme.moneyTicks } }
         },
-        plugins: [{
-            id: 'datalabels',
-            afterDraw: function(chart) {
-                var ctx = chart.ctx;
-                chart.data.datasets.forEach(function(ds, i) {
-                    var meta = chart.getDatasetMeta(i);
-                    meta.data.forEach(function(pt, j) {
-                        var v = ds.data[j];
-                        if (v === 0) return;
-                        var label = v >= 10000 ? (v/10000).toFixed(1) + 'w' : (v >= 1000 ? (v/1000).toFixed(1) + 'k' : v);
-                        ctx.fillStyle = '#0b0b0b';
-                        ctx.font = '10px -apple-system, sans-serif';
-                        ctx.textAlign = 'center';
-                        ctx.fillText(label, pt.x, pt.y - 10);
-                    });
-                });
-            }
-        }]
+        plugins: [makeDatalabels()]
     });
 
     // 品类分布甜甜圈
     // #43：颜色与日历「品类」着色同源（设置页可配，键 cal_commission_*），未配色品类回退循环色
+    // P20a：取色逻辑（8 色循环 + 透明度变体）已迁移至 app.js seriesColors
     var COMMISSION_COLORS = {{ commission_colors|tojson }};
-    // #42：品类可自定义（可能超过 8 个），回退色按未配色序号生成：
-    // 基础 8 色循环，第二轮起叠加透明度做变体，避免写死数组导致超出后颜色重复难辨
-    var TYPE_CHART_BASE_COLORS = ['#2a78d6','#1baf7a','#eda100','#008300','#4a3aa7','#e34948','#e87ba4','#eb6834'];
-    function typeChartFallback(i) {
-        var alphas = ['', 'b3', '66'];
-        var base = TYPE_CHART_BASE_COLORS[i % TYPE_CHART_BASE_COLORS.length];
-        var round = Math.floor(i / TYPE_CHART_BASE_COLORS.length);
-        return base + alphas[round % alphas.length];
-    }
-    function typeChartColors(labels) {
-        var miss = 0;
-        return labels.map(function(label) {
-            return COMMISSION_COLORS[label] || typeChartFallback(miss++);
-        });
-    }
+    var SOURCE_COLORS = {{ source_colors|tojson }};
     var typeChart = new Chart(document.getElementById('type-chart').getContext('2d'), {
         type: 'doughnut',
         data: {
@@ -270,7 +300,7 @@ function updateParam(key, value) {
                 data: {{ type_distribution|map(attribute='cnt')|list|tojson }},
                 gross: {{ type_distribution|map(attribute='gross')|list|tojson }},
                 net: {{ type_distribution|map(attribute='net')|list|tojson }},
-                backgroundColor: typeChartColors({{ type_distribution|map(attribute='commission_type')|list|tojson }}),
+                backgroundColor: seriesColors({{ type_distribution|map(attribute='commission_type')|list|tojson }}, COMMISSION_COLORS),
                 borderWidth: 2, borderColor: '#fff',
             }]
         },
@@ -298,7 +328,7 @@ function updateParam(key, value) {
             typeChart.data.datasets[0].data = data.map(function(d) { return d.cnt; });
             typeChart.data.datasets[0].gross = data.map(function(d) { return d.gross; });
             typeChart.data.datasets[0].net = data.map(function(d) { return d.net; });
-            typeChart.data.datasets[0].backgroundColor = typeChartColors(typeChart.data.labels);  // #43：按品类配置取色，类别集变化时同步重建
+            typeChart.data.datasets[0].backgroundColor = seriesColors(typeChart.data.labels, COMMISSION_COLORS);  // #43：按品类配置取色，类别集变化时同步重建
             typeChart.update();
         });
     });
@@ -308,6 +338,115 @@ function updateParam(key, value) {
     document.getElementById('type-chart').parentElement.style.height = '280px';
     document.getElementById('monthly-stats-chart').parentElement.style.height = '350px';
     document.getElementById('projected-chart').parentElement.style.height = '330px';
+
+    {% if hourly_summary %}
+    // ═══ P20e 时薪图表（开关关闭时整组不渲染） ═══
+    var hourlyTrend = {{ hourly_trend|tojson }};
+    var hourlyByType = {{ hourly_by_type|tojson }};
+    var hourlyBySource = {{ hourly_by_source|tojson }};
+
+    // 月度时薪趋势：实线加权时薪 + 虚线近3月滑动平均（空月断开不连线）
+    var hourlyRates = hourlyTrend.map(function(d) { return d.rate; });
+    var hourlyAvg3 = hourlyRates.map(function(r, i) {
+        if (r === null) return null;
+        var win = [];
+        for (var j = Math.max(0, i - 2); j <= i; j++) { if (hourlyRates[j] !== null) win.push(hourlyRates[j]); }
+        return win.length ? Math.round(win.reduce(function(a, b) { return a + b; }, 0) / win.length * 10) / 10 : null;
+    });
+    new Chart(document.getElementById('hourly-trend-chart').getContext('2d'), {
+        type: 'line',
+        data: {
+            labels: hourlyTrend.map(function(d) { return d.month; }),
+            datasets: [{
+                label: '加权时薪',
+                data: hourlyRates,
+                borderColor: '#8b5cf6', backgroundColor: 'rgba(139,92,246,0.08)',
+                fill: true, tension: 0.3, pointRadius: 4, pointHoverRadius: 7, pointBackgroundColor: '#8b5cf6',
+                spanGaps: false,
+            }, {
+                label: '近3月平均',
+                data: hourlyAvg3,
+                borderColor: '#8b5cf6', borderDash: [6, 3], pointRadius: 0,
+                fill: false, tension: 0.3, spanGaps: false,
+            }]
+        },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            layout: { padding: { top: 16 } },
+            onClick: chartPointClick('monthly_income', '当月完成单明细'),
+            plugins: {
+                legend: { display: false },
+                tooltip: { callbacks: { label: function(ctx) {
+                    var d = hourlyTrend[ctx.dataIndex];
+                    if (ctx.datasetIndex === 1) return '近3月平均 ¥' + ctx.raw + '/h';
+                    return ['加权时薪 ¥' + Math.round(ctx.raw) + '/h', d.count + ' 单 · ' + d.hours + ' h'];
+                }}}
+            },
+            scales: { y: { beginAtZero: true, ticks: { callback: function(v) { return '¥' + v; } } } }
+        }
+    });
+
+    // 品类 / 来源时薪横向条形图（tooltip 附样本单数与总工时）
+    function hourlyBarTooltip(getData) {
+        return { callbacks: { label: function(ctx) {
+            var d = getData()[ctx.dataIndex];
+            return '¥' + Math.round(d.rate) + '/h · ' + d.count + ' 单 · ' + d.hours + ' h';
+        }}};
+    }
+    var curTypeData = hourlyByType;
+    var hourlyTypeChart = new Chart(document.getElementById('hourly-type-chart').getContext('2d'), {
+        type: 'bar',
+        data: {
+            labels: hourlyByType.map(function(d) { return d.name; }),
+            datasets: [{
+                data: hourlyByType.map(function(d) { return d.rate; }),
+                backgroundColor: seriesColors(hourlyByType.map(function(d) { return d.name; }), COMMISSION_COLORS),
+                borderRadius: 4,
+            }]
+        },
+        options: {
+            indexAxis: 'y',
+            responsive: true, maintainAspectRatio: false,
+            plugins: { legend: { display: false }, tooltip: hourlyBarTooltip(function() { return curTypeData; }) },
+            scales: { x: { beginAtZero: true, ticks: { callback: function(v) { return '¥' + v; } } } }
+        }
+    });
+    new Chart(document.getElementById('hourly-source-chart').getContext('2d'), {
+        type: 'bar',
+        data: {
+            labels: hourlyBySource.map(function(d) { return d.name; }),
+            datasets: [{
+                data: hourlyBySource.map(function(d) { return d.rate; }),
+                backgroundColor: seriesColors(hourlyBySource.map(function(d) { return d.name; }), SOURCE_COLORS),
+                borderRadius: 4,
+            }]
+        },
+        options: {
+            indexAxis: 'y',
+            responsive: true, maintainAspectRatio: false,
+            plugins: { legend: { display: false }, tooltip: hourlyBarTooltip(function() { return hourlyBySource; }) },
+            scales: { x: { beginAtZero: true, ticks: { callback: function(v) { return '¥' + v; } } } }
+        }
+    });
+
+    // 月份筛选器 — AJAX 刷新品类时薪
+    document.getElementById('hourly-type-month-filter').addEventListener('change', function() {
+        var month = this.value;
+        var url = '/api/income/hourly-type-distribution?year=' + selectedYear;
+        if (month) url += '&month=' + month;
+        fetch(url).then(function(r) { return r.json(); }).then(function(data) {
+            curTypeData = data;
+            hourlyTypeChart.data.labels = data.map(function(d) { return d.name; });
+            hourlyTypeChart.data.datasets[0].data = data.map(function(d) { return d.rate; });
+            hourlyTypeChart.data.datasets[0].backgroundColor = seriesColors(hourlyTypeChart.data.labels, COMMISSION_COLORS);
+            hourlyTypeChart.update();
+        });
+    });
+
+    document.getElementById('hourly-trend-chart').parentElement.style.height = '350px';
+    document.getElementById('hourly-type-chart').parentElement.style.height = '280px';
+    document.getElementById('hourly-source-chart').parentElement.style.height = '280px';
+    {% endif %}
 })();
 </script>
 {% endblock %}

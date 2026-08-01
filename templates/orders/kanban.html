@@ -64,14 +64,8 @@
     <div class="kanban-column" data-stage="{{ stage }}" id="col-{{ loop.index }}"{% if not orders %} style="display:none;"{% endif %}>
         <div class="kanban-column-header">
             <span class="kanban-column-title">
-                {% if stage == '待开始' %}⚪
-                {% elif stage == '色稿' %}🔵
-                {% elif stage == '线稿' %}🩵
-                {% elif stage == '细化' %}🟠
-                {% elif stage == '收尾' %}🟣
-                {% elif stage == '完成' %}🟢
-                {% elif stage == '退单' %}🔴
-                {% endif %}
+                {# Spec12：通用圆点着色，自定义阶段无 emoji 时回退 #}
+                <span class="kanban-stage-dot" style="background:var(--stage-{{ stage|stage_class }}, var(--color-text-tertiary));"></span>
                 {{ stage }}
             </span>
             <div>
@@ -98,7 +92,7 @@ function quickStageSwitch(orderId, newStage) {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: 'stage=' + encodeURIComponent(newStage)
-    }).then(function(res) { return res.text(); })
+    }).then(function(res) { handleWorkHoursTrigger(res); return res.text(); })
       .then(function(html) {
         var oldCard = document.querySelector('.kanban-card[data-order-id="' + orderId + '"]');
         // 找到目标列
