@@ -1710,7 +1710,7 @@ def settings_page():
                     f"SELECT DISTINCT {field} FROM orders WHERE {field} IS NOT NULL AND {field} != ''"
                 ).fetchall()
                 conn.close()
-                active_values = {r[field] if isinstance(r, sqlite3.Row) else r[0] for r in rows}
+                active_values = {r[0] for r in rows}
             except Exception:
                 pass
         # ① 有自定义颜色配置 AND 仍在 orders 表中使用的孤儿值
