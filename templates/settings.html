@@ -919,7 +919,7 @@ function doMergeCommission() {
 // 初始化合并复选框
 document.addEventListener('DOMContentLoaded', function() {
     var tags = document.querySelectorAll('#commission-type-tags .commission-tag');
-    var names = []; tags.forEach(function(t) { names.push(t.textContent.replace('×','').trim()); });
+    var names = []; tags.forEach(function(t) { names.push(t.dataset.name || t.textContent.replace('×','').replace(/\(\d+\)/, '').trim()); });
     renderMergeCheckboxes(names);
 });
 
