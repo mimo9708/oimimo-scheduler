@@ -214,7 +214,7 @@
             <div class="card-header has-tip">来源管理<span class="tip-trigger">?<span class="header-tip">勾选「平台」的来源会在订单中显示手续费计算，未勾选的来源不计算手续费（直接收全款）。</span></span></div>
             <div class="card-body">
                 <div style="display:grid;grid-template-columns:repeat(auto-fill, minmax(280px, 1fr));gap:var(--space-sm);">
-                    {% for src in source_list %}
+                    {% for src in source_labels %}
                     {% set is_plat = src in platform_sources %}
                     {% set def_fee = all_settings.get('default_fee_' + src, '5') %}
                     <div class="source-item" style="display:flex;align-items:center;gap:var(--space-sm);padding:10px 14px;border:1px solid var(--color-border);border-radius:var(--radius-sm);">
@@ -237,7 +237,7 @@
                     <div style="display:flex;gap:var(--space-sm);margin-top:6px;">
                         <input type="text" id="new-source-name" placeholder="输入来源名称"
                                style="flex:1;padding:8px 12px;border:1px solid var(--color-border);border-radius:var(--radius-sm);font-size:0.88rem;">
-                        <input type="hidden" name="source_list_input" id="source-list-hidden" value="{{ source_list|join(',') }}">
+                        <input type="hidden" name="source_list_input" id="source-list-hidden" value="{{ source_labels|join(',') }}">
                         <button type="button" class="btn btn-primary btn-sm" onclick="addSource()" style="white-space:nowrap;">+ 添加</button>
                     </div>
                 </div>
@@ -259,10 +259,10 @@
             <div class="card-header has-tip">稿件类别管理<span class="tip-trigger">?<span class="header-tip">自定义稿件类别。修改后订单表单中的类别下拉将同步更新。</span></span></div>
             <div class="card-body">
                 <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:var(--space-md);" id="commission-type-tags">
-                    {% for ct in all_settings.get('commission_type_list', '单人半身,色稿大头,双人横插,立绘,场景插画,Q版,服设,厚涂头像').split(',') %}
-                    {% set ct = ct.strip() %}
+                    {% for ct in commission_labels %}
                     {% if ct %}
-                    <span class="settings-tag commission-tag">{{ ct }}<button type="button" class="settings-tag-remove" onclick="removeCommissionTag(this)" title="删除">×</button></span>
+                    {% set ct_count = commission_active_counts.get(ct, 0) %}
+                    <span class="settings-tag commission-tag" data-name="{{ ct }}">{{ ct }}{% if ct_count > 0 %}<span style="font-size:0.7rem;color:var(--color-text-tertiary);margin-left:2px;" title="被 {{ ct_count }} 个订单使用">({{ ct_count }})</span>{% endif %}<button type="button" class="settings-tag-remove" onclick="removeCommissionTag(this)" title="{% if ct_count > 0 %}被 {{ ct_count }} 个订单使用，无法删除{% else %}删除{% endif %}">×</button></span>
                     {% endif %}
                     {% endfor %}
                 </div>
@@ -270,7 +270,7 @@
                     <input type="text" id="new-commission-name" placeholder="输入新稿件类别名称"
                            style="flex:1;padding:8px 12px;border:1px solid var(--color-border);border-radius:var(--radius-sm);font-size:0.88rem;"
                            onkeydown="if(event.key==='Enter'){addCommissionTag();event.preventDefault();}">
-                    <input type="hidden" name="commission_type_list" id="commission-type-hidden" value="{{ all_settings.get('commission_type_list', '单人半身,色稿大头,双人横插,立绘,场景插画,Q版,服设,厚涂头像') }}">
+                    <input type="hidden" name="commission_type_list" id="commission-type-hidden" value="{{ commission_labels|join(',') }}">
                     <button type="button" class="btn btn-primary btn-sm" onclick="addCommissionTag()" style="white-space:nowrap;">+ 添加</button>
                 </div>
                 <!-- 类别合并 -->
@@ -850,23 +850,36 @@ function switchTab(name) {
 }
 
 // 稿件类别
+// #50：订单使用计数，用于删除保护
+var _commissionActiveCounts = {{ commission_active_counts | tojson }};
 function addCommissionTag() {
     var input = document.getElementById('new-commission-name');
     var name = input.value.trim(); if (!name) return;
     var container = document.getElementById('commission-type-tags');
     var existing = container.querySelectorAll('.commission-tag');
     for (var i = 0; i < existing.length; i++) {
-        if (existing[i].textContent.replace('×','').trim() === name) { showToast('已存在', 'error'); return; }
+        var en = existing[i].dataset.name || existing[i].textContent.replace('×','').replace(/\(\d+\)/, '').trim();
+        if (en === name) { showToast('已存在', 'error'); return; }
     }
     var tag = document.createElement('span');
     tag.className = 'settings-tag commission-tag';
+    tag.dataset.name = name;
     tag.innerHTML = escHtml(name) + '<button type="button" class="settings-tag-remove" onclick="removeCommissionTag(this)" title="删除">×</button>';
     container.appendChild(tag); input.value = ''; updateCommissionHidden();
 }
-function removeCommissionTag(btn) { btn.parentElement.remove(); updateCommissionHidden(); }
+function removeCommissionTag(btn) {
+    var tag = btn.parentElement;
+    var name = tag.dataset.name || tag.textContent.replace('×','').replace(/\(\d+\)/, '').trim();
+    var cnt = _commissionActiveCounts[name] || 0;
+    if (cnt > 0) {
+        showToast('「' + name + '」仍被 ' + cnt + ' 个订单使用，无法删除。请先将相关订单改为其他类别。', 'error');
+        return;
+    }
+    tag.remove(); updateCommissionHidden();
+}
 function updateCommissionHidden() {
     var tags = document.querySelectorAll('#commission-type-tags .commission-tag');
-    var names = []; tags.forEach(function(t) { names.push(t.textContent.replace('×','').trim()); });
+    var names = []; tags.forEach(function(t) { names.push(t.dataset.name || t.textContent.replace('×','').replace(/\(\d+\)/, '').trim()); });
     document.getElementById('commission-type-hidden').value = names.join(',');
     renderMergeCheckboxes(names);
 }

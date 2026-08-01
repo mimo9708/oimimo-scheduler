@@ -7,7 +7,7 @@
 #define MyAppName "oimimo"
 #define MyAppDisplayName "oimimo scheduler"
 #ifndef MyAppVersion
-  #define MyAppVersion "1.3.0"
+  #define MyAppVersion "1.3.1"
 #endif
 #define MyAppPublisher "oimimo"
 #define MyAppExeName "oimimo.exe"

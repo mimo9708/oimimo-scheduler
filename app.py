@@ -86,7 +86,7 @@ UPLOAD_ORDERS_DIR = os.path.join(UPLOAD_DIR, 'orders')
 # ═══════════════════════════════════════════════════════════
 
 # #41 当前应用版本（发版时与上传版 CHANGELOG/installer.iss/git tag 保持一致）
-APP_VERSION = '1.3.0'
+APP_VERSION = '1.3.1'
 # #41 上传版 GitHub 仓库（前端直连其 Releases API 检测新版本）
 GITHUB_REPO = 'mimo9708/oimimo-scheduler'
 
@@ -1689,9 +1689,47 @@ def settings_page():
     for _sys in (db.get_done_stage(), db.get_refund_stage()):
         if _sys not in _flow_stage_seen:
             _flow_stages.append(_sys)
+    # #42+#48+#50：source/commission 着色面板数据源必须与稿件类别/来源管理列表同步，
+    # 不再使用 get_choices 的 auto-discover（会从 orders 表拉回已重命名的旧值）。
+    # 追加：①有自定义颜色配置的孤儿值（保留颜色投资）②orders 表中仍活跃的孤儿值（防删除后丢失）
+    def _synced_labels(settings_key, choice_type, prefix):
+        """返回与管理列表同步的标签列表 + 有颜色配置或仍在 orders 中使用的孤儿值。"""
+        raw = all_settings.get(settings_key, '')
+        base = [x.strip() for x in raw.split(',') if x.strip()]
+        if not base:
+            base = db.get_choices(choice_type)  # 回退到注册表默认
+        base_set = set(base)
+        reg = db.CHOICE_REGISTRY.get(choice_type, {})
+        field = reg.get('field', '')
+        # 获取 orders 表中实际使用的值
+        active_values = set()
+        if field:
+            try:
+                conn = db.get_db()
+                rows = conn.execute(
+                    f"SELECT DISTINCT {field} FROM orders WHERE {field} IS NOT NULL AND {field} != ''"
+                ).fetchall()
+                conn.close()
+                active_values = {r[field] if isinstance(r, sqlite3.Row) else r[0] for r in rows}
+            except Exception:
+                pass
+        # ① 有自定义颜色配置 AND 仍在 orders 表中使用的孤儿值
+        for key in all_settings:
+            if key.startswith(prefix):
+                orphan = key[len(prefix):]
+                if orphan and orphan not in base_set and orphan in active_values:
+                    base.append(orphan)
+                    base_set.add(orphan)
+        # ② orders 表中仍活跃但不在管理列表中的孤儿值（防止用户删除后着色/管理区丢失）
+        for val in sorted(active_values):
+            if val and val not in base_set:
+                base.append(val)
+                base_set.add(val)
+        return base
+
     custom_mode_labels = {
-        'source': db.get_choices('source'),
-        'commission': db.get_choices('commission_type'),
+        'source': _synced_labels('source_list', 'source', 'cal_source_'),
+        'commission': _synced_labels('commission_type_list', 'commission_type', 'cal_commission_'),
         'stage': _flow_stages,
     }
 
@@ -1711,6 +1749,30 @@ def settings_page():
                 'default': default_color,
             })
         cal_palettes[mid] = items
+
+    # #50：管理区与着色面板使用同一份同步列表，防止稿件类别/来源被删除后管理区为空
+    commission_labels = custom_mode_labels['commission']
+    source_labels = custom_mode_labels['source']
+    # #50：稿件类别/来源在订单中的使用计数，用于前端删除保护
+    commission_active_counts = {}
+    source_active_counts = {}
+    try:
+        _conn = db.get_db()
+        for r in _conn.execute(
+            "SELECT commission_type, COUNT(*) AS cnt FROM orders "
+            "WHERE commission_type IS NOT NULL AND commission_type != '' "
+            "GROUP BY commission_type"
+        ).fetchall():
+            commission_active_counts[r['commission_type']] = r['cnt']
+        for r in _conn.execute(
+            "SELECT source, COUNT(*) AS cnt FROM orders "
+            "WHERE source IS NOT NULL AND source != '' "
+            "GROUP BY source"
+        ).fetchall():
+            source_active_counts[r['source']] = r['cnt']
+        _conn.close()
+    except Exception as e:
+        logging.error('统计订单使用计数失败: %s', e)
 
     # 来源管理
     source_list = db.get_source_list()
@@ -1739,6 +1801,10 @@ def settings_page():
                            groups=groups,
                            cal_modes=cal_modes,
                            cal_palettes=cal_palettes,
+                           commission_labels=commission_labels,
+                           commission_active_counts=commission_active_counts,
+                           source_labels=source_labels,
+                           source_active_counts=source_active_counts,
                            source_list=source_list,
                            platform_sources=platform_sources,
                            font_size=font_size,
