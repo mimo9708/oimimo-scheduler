@@ -1,0 +1,84 @@
+{# 小工具详情页骨架（Spec 22 / 任务卡 89 T22.4）
+   隔离约定 D4：根容器 .tool-page.tool-<slug>；子模板 extends 本骨架并填 tool_actions/tool_content。 #}
+{% extends "base.html" %}
+{% block title %}{{ tool.name|e }} — oimimo scheduler{% endblock %}
+
+{% block content %}
+<div class="tool-page tool-{{ tool.slug }}">
+    <div class="tool-header">
+        <a href="/tools" class="tool-back" title="返回小工具">
+            <i data-lucide="arrow-left"></i>
+            <span>返回小工具</span>
+        </a>
+        <div class="tool-header-main">
+            <div class="tool-header-icon"><i data-lucide="{{ tool.icon|e }}"></i></div>
+            <div>
+                <h1 class="page-title" style="margin:0;">{{ tool.name|e }}</h1>
+                <div class="tool-header-desc">{{ tool.desc|e }}</div>
+            </div>
+        </div>
+        <div class="tool-header-actions">{% block tool_actions %}{% endblock %}</div>
+    </div>
+    {% block tool_content %}{% endblock %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<style>
+    .tool-header {
+        display: flex;
+        align-items: center;
+        gap: var(--space-md);
+        margin-bottom: var(--space-lg);
+        flex-wrap: wrap;
+    }
+    .tool-back {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        font-size: 0.8rem;
+        color: var(--color-text-tertiary);
+        text-decoration: none;
+        padding: 4px 8px;
+        border-radius: var(--radius-sm);
+        flex-shrink: 0;
+    }
+    .tool-back:hover { color: var(--color-text); background: var(--color-surface); }
+    .tool-back svg { width: 15px; height: 15px; }
+    .tool-header-main {
+        display: flex;
+        align-items: center;
+        gap: var(--space-sm);
+        flex: 1;
+        min-width: 0;
+    }
+    .tool-header-icon {
+        width: 44px;
+        height: 44px;
+        border-radius: var(--radius-md);
+        background: var(--color-surface);
+        border: 1px solid var(--color-border);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--color-text-secondary);
+        flex-shrink: 0;
+    }
+    .tool-header-icon svg { width: 22px; height: 22px; }
+    .tool-header-desc {
+        font-size: 0.78rem;
+        color: var(--color-text-tertiary);
+        margin-top: 2px;
+    }
+    .tool-header-actions {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        flex-shrink: 0;
+    }
+</style>
+<script>
+    // 进入工具详情页 → 写入最近使用（D3）
+    recordRecentTool({{ tool.slug|tojson }}, {{ tool.name|tojson }}, {{ tool.icon|tojson }});
+</script>
+{% endblock %}

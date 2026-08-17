@@ -1,0 +1,89 @@
+{# 小票打印机预览/打印模式（Spec 23 卡 95 T23.8/T23.9）
+   D15：预览零编辑控件，顶部仅四按钮；D5：渲染唯一源 = static/receipt.js rcRender。
+   D12：@media print 隐藏全部 chrome，仅小票区且强制白底黑字（背景/纸色/墨色不打印）。 #}
+{% extends "tools/_shell.html" %}
+
+{% block tool_actions %}
+<a href="/tools/receipt/edit" class="btn btn-primary">编辑</a>
+<button type="button" class="btn btn-ghost" onclick="window.print()"><i data-lucide="printer"></i> 打印</button>
+<button type="button" class="btn btn-ghost" onclick="rc_downloadPng(this)">下载 PNG</button>
+<button type="button" class="btn btn-ghost" onclick="rc_copyImage(this)">复制图片</button>
+{% endblock %}
+
+{% block tool_content %}
+<div class="rc-preview-layout">
+    <aside class="rc-tpl-sidebar" id="rc-tpl-sidebar">
+        <div class="rc-tpl-sidebar-title"><i data-lucide="layers"></i> 样式模板</div>
+        <div id="rc-tpl-side-list"></div>
+    </aside>
+    <div class="rc-preview-main" id="rc-app"></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+{{ super() }}
+<script src="{{ url_for('static', filename='receipt.js') }}?v={{ APP_VERSION }}"></script>
+<script>
+    // D5：Jinja 注入草稿 JSON，receipt.js 单源渲染（编辑页同一入口）
+    window.RC_DRAFT = {{ draft|tojson }};
+    window.RC_TEMPLATES = {{ templates|tojson }};
+    rcRender(document.getElementById('rc-app'), window.RC_DRAFT);
+    rcPreviewSidebarInit();
+</script>
+<style>
+    /* ── 模板侧边栏（2026-08-13 用户需求 2a）：点击即应用并落库 ── */
+    .rc-preview-layout { display: flex; gap: var(--space-lg); align-items: flex-start; }
+    .rc-tpl-sidebar {
+        width: 200px; flex-shrink: 0; position: sticky; top: var(--space-md);
+        background: var(--color-surface); border: 1px solid var(--color-border);
+        border-radius: var(--radius-md); padding: var(--space-md);
+    }
+    .rc-tpl-sidebar-title {
+        display: flex; align-items: center; gap: 6px;
+        font-size: 0.75rem; font-weight: 700; color: var(--color-text-tertiary);
+        letter-spacing: 0.08em; margin-bottom: var(--space-sm);
+    }
+    .rc-tpl-sidebar-title svg { width: 14px; height: 14px; }
+    .rc-tpl-side-item {
+        display: block; width: 100%; text-align: left;
+        padding: 7px 9px; margin-bottom: 4px; border: 1px solid var(--color-border);
+        border-radius: var(--radius-sm); background: var(--color-bg);
+        color: var(--color-text-secondary); font-size: 0.8rem; cursor: pointer;
+        transition: border-color 0.15s, color 0.15s;
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .rc-tpl-side-item:hover { border-color: var(--color-text); color: var(--color-text); }
+    .rc-tpl-side-item.active {
+        border-color: var(--color-text); color: var(--color-text); font-weight: 700;
+        box-shadow: inset 0 0 0 1px var(--color-text);
+    }
+    .rc-tpl-side-empty { font-size: 0.76rem; color: var(--color-text-tertiary); padding: 4px 0; }
+    .rc-preview-main { flex: 1; min-width: 0; }
+    @media (max-width: 900px) { .rc-tpl-sidebar { display: none; } }
+
+    /* ── T23.9 打印规格（D12）：仅小票区 + 强制白底黑字省墨 ── */
+    @media print {
+        @page { margin: 10mm; }
+        .app-layout { display: block !important; }
+        .sidebar, .tool-header, #center-modal, #edit-drawer, .receipt-overlay,
+        #toast-container, .rc-tpl-sidebar { display: none !important; }
+        .main-content {
+            padding: 0 !important; margin: 0 !important; overflow: visible !important;
+            background: #fff !important;
+        }
+        .tool-page { padding: 0 !important; }
+        .rc-wrap { padding: 0 !important; }
+        /* 响应式缩放仅屏幕用：打印时还原原始尺寸（2026-08-13 需求 1） */
+        #rc-app .rc-viewport { padding: 0 !important; }
+        #rc-app .rc-scale { transform: none !important; height: auto !important; }
+        #rc-app .rc-paper {
+            background: #fff !important; background-image: none !important;
+            color: #000 !important; box-shadow: none !important;
+            width: auto !important; max-width: none !important;
+        }
+        /* 赠品绿打印时统一黑字（省墨口径：全票黑白） */
+        #rc-app .rc-paper * { color: #000 !important; }
+        /* 条码 lineColor 是属性值不受 CSS 影响，保留；锯齿 mask 打印保留（纯 CSS 可打） */
+    }
+</style>
+{% endblock %}

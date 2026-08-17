@@ -101,9 +101,10 @@
         initAll: initAll
     };
 
-    // HTMX 内容交换后自动初始化新插入的日期输入框
+    // HTMX 内容交换后自动初始化新插入的日期输入框（卡 156：历史恢复的 afterSwap 无 target，须守卫）
     document.addEventListener('htmx:afterSwap', function (evt) {
-        var target = evt.detail.target;
+        var target = evt.detail && evt.detail.target;
+        if (!target || !target.querySelectorAll) return;
         var inputs = target.querySelectorAll('.date-field input[type="date"], .date-field input[type="datetime-local"]');
         for (var i = 0; i < inputs.length; i++) {
             if (!inputs[i]._dtToggleInit) {

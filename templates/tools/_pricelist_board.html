@@ -1,0 +1,153 @@
+{# 价目表 #pl-app 整区片段（meta 卡片 + 分类分节行列表）；
+   页面 include + 写操作 HX-Retarget 复用。DOM 契约与 pricelist.html 的 pl_* JS 对应。 #}
+<div class="card pl-meta-card">
+    <div class="pl-meta-field">
+        <label for="pl-meta-title">菜单标题</label>
+        <input type="text" id="pl-meta-title" maxlength="100"
+               value="{{ meta.title|e }}" placeholder="价目表">
+    </div>
+    <div class="pl-meta-field">
+        <label for="pl-meta-note">附注</label>
+        <textarea id="pl-meta-note" rows="1" maxlength="500"
+                  placeholder="定金比例 / 平台手续费 / 交期说明…">{{ meta.note|e }}</textarea>
+    </div>
+    <button type="button" class="btn btn-ghost" onclick="pl_saveMeta()">保存</button>
+</div>
+
+{% if items %}
+<div id="pl-cat-list">
+{% for cat, rows in items|groupby('category') %}
+<div class="pl-cat" data-cat="{{ cat|e }}">
+    <div class="pl-cat-title">
+        <span class="pl-cat-drag-handle" title="拖拽调整分类顺序"><i data-lucide="grip-vertical"></i></span>
+        <span>{{ cat|e }}</span><span class="pl-cat-count">{{ rows|length }}</span>
+        <button type="button" class="pl-cat-move-btn" onclick="pl_moveCat(this,-1)" title="上移"><i data-lucide="chevron-up"></i></button>
+        <button type="button" class="pl-cat-move-btn" onclick="pl_moveCat(this,1)" title="下移"><i data-lucide="chevron-down"></i></button>
+    </div>
+    <div class="pl-cat-body">
+        {% for it in rows %}
+        <div class="card pl-row" data-id="{{ it.id }}">
+            <div class="pl-thumbs" data-iid="{{ it.id }}">
+                {% for img in it.images %}
+                <div class="pl-thumb-item" data-imgid="{{ img.id }}" title="拖拽调整顺序">
+                    <img src="{{ img.thumb_url }}" alt="例图">
+                    <button type="button" class="pl-thumb-del" title="删除例图"
+                            onclick="pl_removeImage({{ img.id }})"><i data-lucide="x"></i></button>
+                </div>
+                {% endfor %}
+                {% if it.images|length < img_limit %}
+                <span class="pl-thumb-empty" title="上传例图（最多 {{ img_limit }} 张）"
+                      onclick="pl_uploadClick({{ it.id }})">
+                    <i data-lucide="image-plus"></i>
+                </span>
+                {% endif %}
+            </div>
+            <div class="pl-name-cell">
+                <span class="pl-drag-handle" title="拖拽排序"><i data-lucide="grip-vertical"></i></span>
+                <div class="pl-name">{{ it.name|e }}</div>
+            </div>
+            <div class="pl-price">{{ it|price_range_fmt }}</div>
+            <div class="pl-unit">{{ it.unit|e }}</div>
+            <div class="pl-desc" title="{{ it.description|e }}">{{ it.description|e }}</div>
+            <div class="pl-row-actions">
+                <button type="button" class="btn btn-ghost btn-sm"
+                        onclick="openCenterModal('/tools/pricelist/{{ it.id }}/edit', '编辑价目项目')">编辑</button>
+                <form hx-post="/tools/pricelist/{{ it.id }}/delete" style="display:inline;"
+                      onsubmit="return confirm('删除项目「{{ it.name|e }}」？');">
+                    <button type="submit" class="btn btn-ghost btn-sm" style="color:var(--color-danger);">删除</button>
+                </form>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endfor %}
+</div><!-- /pl-cat-list -->
+{% else %}
+<div class="empty-state" style="padding:56px 16px;">
+    <div class="empty-state-icon">🧾</div>
+    <div class="empty-state-text">还没有价目项目</div>
+    <div style="font-size:0.8rem;color:var(--color-text-tertiary);margin-top:6px;">
+        新建项目并上传例图，预览页一键导出可分享的价目表图片。
+    </div>
+</div>
+{% endif %}
+<style>
+    /* 分类拖拽手柄 + 上下移动按钮（Spec 28 Task 124） */
+    .pl-cat-drag-handle {
+        cursor: grab;
+        color: var(--color-text-tertiary);
+        display: inline-flex;
+        padding: 2px;
+        margin-right: 2px;
+    }
+    .pl-cat-drag-handle svg { width: 14px; height: 14px; }
+    .pl-cat-move-btn {
+        background: none;
+        border: none;
+        cursor: pointer;
+        color: var(--color-text-tertiary);
+        padding: 1px;
+        display: inline-flex;
+        align-items: center;
+        border-radius: var(--radius-sm);
+        opacity: 0;
+        transition: opacity 0.12s ease;
+    }
+    .pl-cat-move-btn svg { width: 13px; height: 13px; }
+    .pl-cat-move-btn:hover { color: var(--color-text-secondary); background: var(--color-surface); }
+    .pl-cat-title:hover .pl-cat-move-btn { opacity: 1; }
+    .pl-cat.pl-cat-dragging { opacity: 0.5; }
+    /* 拖拽手柄与名称共用第二列 */
+    .pl-name-cell { display: flex; align-items: center; gap: 4px; min-width: 0; }
+    .pl-name-cell .pl-name { min-width: 0; }
+    .pl-cat-count {
+        font-size: 0.72rem;
+        font-weight: 500;
+        color: var(--color-text-tertiary);
+        background: var(--color-surface);
+        border: 1px solid var(--color-border);
+        border-radius: 999px;
+        padding: 0 7px;
+        line-height: 1.5;
+    }
+    /* 多例图组：缩略图横排 + hover 删除角标 + 拖拽排序（2026-08-12 UX 改造） */
+    .pl-thumbs { display: flex; gap: 6px; align-items: center; min-width: 0; }
+    .pl-thumb-item {
+        position: relative;
+        width: 44px;
+        height: 44px;
+        flex-shrink: 0;
+        cursor: grab;
+    }
+    .pl-thumb-item img {
+        width: 44px;
+        height: 44px;
+        border-radius: var(--radius-sm);
+        object-fit: contain;
+        border: 1px solid var(--color-border);
+        background: var(--color-bg);
+        display: block;
+    }
+    .pl-thumb-item.pl-img-dragging { opacity: 0.5; }
+    .pl-thumb-del {
+        position: absolute;
+        top: -6px;
+        right: -6px;
+        width: 17px;
+        height: 17px;
+        border-radius: 999px;
+        border: 1px solid var(--color-border);
+        background: var(--color-surface);
+        color: var(--color-danger);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        padding: 0;
+        opacity: 0;
+        transition: opacity 0.12s ease;
+    }
+    .pl-thumb-del svg { width: 10px; height: 10px; }
+    .pl-thumb-item:hover .pl-thumb-del { opacity: 1; }
+</style>

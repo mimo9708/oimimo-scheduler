@@ -42,6 +42,7 @@ def _start_server(port, state):
     os.chdir(ROOT)
     import app
     try:
+        app.start_feed_server()  # Spec20 卡 85：feed_enabled=1 时拉起 1097 第二监听（幂等）
         app.app.run(debug=False, host="127.0.0.1", port=port)
     except Exception as e:
         state['error'] = str(e)
@@ -94,6 +95,36 @@ def _is_own_console():
         return n == 1
     except Exception:
         return False
+
+
+def _acquire_single_instance(wait=False):
+    """单实例守卫（Spec 17 / 任务卡 77）：Windows 命名互斥体。
+
+    返回 True 表示本进程获得互斥体（首个实例，或 wait=True 时等到了释放）；
+    返回 False 表示已有实例在运行。
+
+    - 非 Windows：直接 True（降级跳过，不做限制）
+    - 成功获得的句柄不设全局引用、不显式关闭：进程以任何方式退出（含崩溃/强杀）
+      由 OS 回收互斥体，无残留锁死
+    - wait=True：重启场景用，0.5s 轮询等旧进程释放，最长 30s；
+      每次失败尝试的句柄必须 CloseHandle，否则本进程持有的句柄会让对象一直存在，
+      轮询永远等不到释放（自锁）
+    """
+    if os.name != 'nt':
+        return True
+    import ctypes
+    kernel32 = ctypes.windll.kernel32
+    name = r'Local\oimimo-scheduler-single-instance'
+    ERROR_ALREADY_EXISTS = 183
+    deadline = time.time() + 30 if wait else 0
+    while True:
+        h = kernel32.CreateMutexW(None, False, name)
+        if kernel32.GetLastError() != ERROR_ALREADY_EXISTS:
+            return True
+        kernel32.CloseHandle(h)
+        if not wait or time.time() >= deadline:
+            return False
+        time.sleep(0.5)
 
 
 def _init_file_logging():
@@ -187,6 +218,8 @@ def show_postcard(url, state):
             cmd = [sys.executable, script_path]
             if port != 5001:
                 cmd.append(str(port))
+        # 任务卡 77 T17.3：新进程等待旧进程释放互斥体后再起服，消除重启竞态
+        cmd.append('--wait-mutex')
 
         try:
             # 启动新进程（完全独立，不继承当前进程）
@@ -380,14 +413,34 @@ def main():
         print("=" * 50)
         install_deps()
 
-    init_db()
-
+    # 参数解析（任务卡 77 T17.2）：遍历 argv —— 纯数字 → 端口；--wait-mutex → 重启等待标志
+    # 向后兼容：run.bat（无参）、launcher.py 1096、launcher.py 1096 --wait-mutex 均合法
     port = 5001
-    if len(sys.argv) > 1:
+    wait_mutex = False
+    for arg in sys.argv[1:]:
+        if arg == '--wait-mutex':
+            wait_mutex = True
+        elif arg.isdigit():
+            try:
+                port = int(arg)
+            except Exception:
+                pass
+
+    # 单实例守卫（任务卡 77 T17.1）：已有实例在运行 → 提示后退出，不弹端口报错
+    if not _acquire_single_instance(wait=wait_mutex):
+        msg = 'oimimo scheduler 已在运行中，请查看系统托盘图标。'
         try:
-            port = int(sys.argv[1])
+            import tkinter as _tk
+            import tkinter.messagebox as _tkmb
+            _r = _tk.Tk()          # showinfo 前必须有 root，否则 TclError 静默降级
+            _r.withdraw()
+            _tkmb.showinfo('oimimo scheduler', msg)
+            _r.destroy()
         except Exception:
-            pass
+            print(msg, flush=True)
+        sys.exit(0)
+
+    init_db()
 
     url = f"http://127.0.0.1:{port}"
     state = {'port': port}

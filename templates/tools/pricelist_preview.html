@@ -1,0 +1,658 @@
+{# 价目表预览菜单（默认落地页，2026-08-12 UX 改造）：
+   浏览模式优先——打开即见成品菜单；编辑入口收敛到头部按钮。
+   视觉对齐画师圈价目表范式：大号淡色编号分节 / 暖色价格大字（区间）/ 多例图横排（≤3）/ 说明完整。
+   PNG 导出沿用自研 foreignObject 导出器（D8 偏离备案：离线可用，无第三方依赖） #}
+{% extends "tools/_shell.html" %}
+{% from "tools/_pricelist_macros.html" import pl_cat_header, pl_item %}
+
+{% block tool_actions %}
+{# Spec 31 D1/D5：视图切换分段按钮（默认长条激活，JS 按记忆纠正） #}
+<div class="pl-view-toggle" role="group" aria-label="视图模式切换">
+    <button type="button" class="btn btn-primary" id="pl-view-strip-btn" onclick="pl_setView('strip')" title="长条视图">
+        <i data-lucide="rows-3"></i> 长条
+    </button>
+    <button type="button" class="btn btn-ghost" id="pl-view-cards-btn" onclick="pl_setView('cards')" title="卡片视图">
+        <i data-lucide="layout-grid"></i> 卡片
+    </button>
+</div>
+<a href="/tools/pricelist/edit" class="btn btn-primary">编辑</a>
+{# 整图导出仅在长条视图可用：卡片视图下 #pl-menu 隐藏，渲染结果不可靠 #}
+<button type="button" class="btn btn-ghost" id="pl-copy-btn" onclick="pl_copyImage(this)">复制图片</button>
+<button type="button" class="btn btn-ghost" id="pl-dl-btn" onclick="pl_downloadPng(this)">下载 PNG</button>
+<button type="button" class="btn btn-ghost" id="pl-cat-dl-btn" onclick="pl_downloadByCategory(this)">按分类导出</button>
+{% endblock %}
+
+{% block tool_content %}
+<div class="pl-preview-wrap">
+    <div class="pl-menu" id="pl-menu">
+        <div class="pl-menu-title">{{ (meta.title or '价目表')|e }}</div>
+        <div class="pl-menu-sub">COMMISSION · PRICE LIST</div>
+        {% if items %}
+        {% for cat, rows in items|groupby('category') %}
+        {{ pl_cat_header(cat, loop.index) }}
+        {% for it in rows %}
+        {{ pl_item(it) }}
+        {% endfor %}
+        {% endfor %}
+        {% else %}
+        <div class="pl-menu-empty">还没有价目项目</div>
+        {% endif %}
+        {% if meta.note %}
+        <div class="pl-menu-note">{{ meta.note|e }}</div>
+        {% endif %}
+    </div>
+    {# Spec 31 形式二：分类卡片网格（初始 hidden，卡 145 加视图切换；与长条共用同一宏） #}
+    <div class="pl-cards" id="pl-cards" hidden>
+        <div class="pl-cards-head">
+            <div class="pl-menu-title">{{ (meta.title or '价目表')|e }}</div>
+            <div class="pl-menu-sub">COMMISSION · PRICE LIST</div>
+        </div>
+        {% if items %}
+        <div class="pl-cards-grid">
+            {% for cat, rows in items|groupby('category') %}
+            <div class="pl-card" data-cat="{{ cat|e }}">
+                <button type="button" class="pl-card-dl-btn" onclick="pl_downloadCard(this)" title="下载此分类 PNG">
+                    <i data-lucide="download"></i>
+                </button>
+                {{ pl_cat_header(cat, loop.index) }}
+                {% for it in rows %}
+                {{ pl_item(it) }}
+                {% endfor %}
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+        {% if meta.note %}
+        <div class="pl-menu-note">{{ meta.note|e }}</div>
+        {% endif %}
+    </div>
+    {% if not items %}
+    <div class="pl-preview-empty-cta">
+        <a href="/tools/pricelist/edit" class="btn btn-primary">去新建项目</a>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+{{ super() }}
+<style>
+    .tool-pricelist .pl-preview-wrap {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        padding: var(--space-md) 0 var(--space-xl);
+        background: var(--color-bg);
+    }
+    .tool-pricelist .pl-menu {
+        width: 640px;
+        max-width: 100%;
+        background: var(--color-surface);
+        border: 1px solid var(--color-border);
+        border-radius: var(--radius-lg);
+        padding: 40px 44px;
+        color: var(--color-text);
+    }
+    /* 菜单头：大标题 + 英文小副标 + 实线分隔（对齐参考范式） */
+    .tool-pricelist .pl-menu-title {
+        font-size: 1.65rem;
+        font-weight: 700;
+        text-align: center;
+        letter-spacing: 0.12em;
+    }
+    .tool-pricelist .pl-menu-sub {
+        text-align: center;
+        font-size: 0.68rem;
+        letter-spacing: 0.32em;
+        color: var(--color-text-tertiary);
+        margin-top: 9px;
+        padding-bottom: 18px;
+        margin-bottom: 6px;
+        border-bottom: 2px solid var(--color-border-strong);
+    }
+    /* 分类分节：大号淡色编号 + 名称 + 右侧延伸细线 */
+    .tool-pricelist .pl-menu-cat {
+        display: flex;
+        align-items: baseline;
+        gap: 10px;
+        margin: 26px 0 4px;
+    }
+    .tool-pricelist .pl-menu-cat-no {
+        font-size: 1.9rem;
+        font-weight: 700;
+        line-height: 1;
+        letter-spacing: 0.04em;
+        color: color-mix(in srgb, var(--color-text-tertiary) 45%, transparent);
+    }
+    .tool-pricelist .pl-menu-cat-name {
+        font-size: 0.92rem;
+        font-weight: 700;
+        color: var(--color-text-secondary);
+        letter-spacing: 0.08em;
+    }
+    .tool-pricelist .pl-menu-cat::after {
+        content: '';
+        flex: 1;
+        height: 1px;
+        background: var(--color-border);
+        align-self: center;
+    }
+    /* 项目：例图横排在上（展示主体）+ 名称…价格行 + 完整说明 */
+    .tool-pricelist .pl-menu-item { padding: 12px 0 14px; }
+    .tool-pricelist .pl-menu-imgs {
+        display: grid;
+        gap: 6px;
+        margin-bottom: 10px;
+        align-items: start;  /* A2 自适应：各格按自身宽高比取自然高度，顶部对齐 */
+    }
+    .tool-pricelist .pl-imgs-1 { grid-template-columns: minmax(0, 320px); }
+    .tool-pricelist .pl-imgs-2 { grid-template-columns: repeat(2, 1fr); }
+    .tool-pricelist .pl-imgs-3 { grid-template-columns: repeat(3, 1fr); }
+    .tool-pricelist .pl-imgs-4 { grid-template-columns: repeat(4, 1fr); }
+    .tool-pricelist .pl-imgs-5 { grid-template-columns: repeat(5, 1fr); }
+    .tool-pricelist .pl-imgs-6 { grid-template-columns: repeat(5, 1fr); }
+    /* 7+ 张回退单列（Spec 30 D4 flex wrap 等价，grid 无匹配类时默认 1 列） */
+    .tool-pricelist .pl-menu-img {
+        width: 100%;
+        height: auto;             /* A1 等比：高度随图片自身宽高比 */
+        max-height: 480px;        /* D2=B 长图保护：不裁切，整体缩小居中留白 */
+        object-fit: contain;      /* D2=B：max-height 生效时保持完整图片 */
+        border-radius: var(--radius-md);
+        border: 1px solid var(--color-border);
+        background: var(--color-bg);
+        display: block;
+    }
+    .tool-pricelist .pl-menu-item-head {
+        display: flex;
+        align-items: baseline;
+        gap: 10px;
+    }
+    .tool-pricelist .pl-menu-name {
+        font-weight: 600;
+        font-size: 0.98rem;
+        word-break: break-all;
+    }
+    .tool-pricelist .pl-menu-leader {
+        flex: 1;
+        border-bottom: 1px dotted var(--color-border-strong);
+        min-width: 20px;
+        transform: translateY(-4px);
+    }
+    .tool-pricelist .pl-menu-price {
+        font-weight: 700;
+        font-size: 1.2rem;
+        color: var(--color-warning);
+        white-space: nowrap;
+        flex-shrink: 0;
+    }
+    .tool-pricelist .pl-menu-unit {
+        font-size: 0.72rem;
+        font-weight: 400;
+        color: var(--color-text-tertiary);
+        margin-left: 3px;
+    }
+    .tool-pricelist .pl-menu-desc {
+        font-size: 0.8rem;
+        color: var(--color-text-secondary);
+        line-height: 1.7;
+        margin-top: 5px;
+        white-space: pre-wrap;
+        word-break: break-all;
+    }
+    .tool-pricelist .pl-menu-empty {
+        text-align: center;
+        color: var(--color-text-tertiary);
+        padding: 34px 0;
+        font-size: 0.88rem;
+    }
+    .tool-pricelist .pl-preview-empty-cta {
+        margin-top: var(--space-md);
+        display: flex;
+        justify-content: center;
+    }
+    .tool-pricelist .pl-menu-note {
+        margin-top: 24px;
+        padding-top: 16px;
+        border-top: 1px dashed var(--color-border-strong);
+        font-size: 0.78rem;
+        color: var(--color-text-secondary);
+        line-height: 1.75;
+        white-space: pre-wrap;
+        word-break: break-all;
+    }
+    /* ── Spec 31 形式二：分类卡片网格（#pl-cards，全 token 无硬编码色值） ── */
+    .tool-pricelist .pl-cards {
+        width: 100%;
+    }
+    .tool-pricelist .pl-cards-head {
+        margin-bottom: var(--space-md);
+    }
+    .tool-pricelist .pl-cards-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(min(300px, 100%), 1fr));
+        gap: var(--space-md);
+        align-items: start;
+    }
+    .tool-pricelist .pl-card {
+        position: relative;
+        background: var(--color-surface);
+        border: 1px solid var(--color-border);
+        border-radius: var(--radius-lg);
+        padding: 20px 22px;
+    }
+    /* ── Spec 31 D4：单卡下载按钮（仅卡片视图可见，导出时 helper 自动移除） ── */
+    .tool-pricelist .pl-card-dl-btn {
+        position: absolute;
+        top: 8px;
+        right: 8px;
+        width: 28px;
+        height: 28px;
+        padding: 0;
+        border: none;
+        background: transparent;
+        color: var(--color-text-tertiary);
+        cursor: pointer;
+        border-radius: var(--radius-sm);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        opacity: 0;
+        transition: opacity var(--transition-fast);
+    }
+    .tool-pricelist .pl-card:hover .pl-card-dl-btn { opacity: 1; }
+    .tool-pricelist .pl-card-dl-btn:hover {
+        background: var(--color-bg);
+        color: var(--color-text);
+    }
+    .tool-pricelist .pl-card-dl-btn svg { width: 16px; height: 16px; }
+    /* ── Spec 31 视图切换分段按钮（工具栏，激活态复用 btn-primary） ── */
+    .tool-pricelist .pl-view-toggle {
+        display: inline-flex;
+        margin-right: var(--space-sm);
+    }
+    .tool-pricelist .pl-view-toggle .btn + .btn { margin-left: -1px; }
+    .tool-pricelist .pl-view-toggle .btn:first-child {
+        border-radius: var(--radius-md) 0 0 var(--radius-md);
+    }
+    .tool-pricelist .pl-view-toggle .btn:last-child {
+        border-radius: 0 var(--radius-md) var(--radius-md) 0;
+    }
+    .tool-pricelist .pl-view-toggle svg { width: 15px; height: 15px; }
+</style>
+<script>
+(function() {
+    var EXPORT_SCALE = 2;
+    var exporting = false;
+
+    // ── 克隆菜单并内联全部计算样式（foreignObject 内无样式表，必须逐节点搬运） ──
+    function buildStyledClone() {
+        var src = document.getElementById('pl-menu');
+        if (!src) return null;
+        var clone = src.cloneNode(true);
+        var srcNodes = [src];
+        var cloneNodes = [clone];
+        (function collect(el, arr) {
+            for (var i = 0; i < el.children.length; i++) {
+                arr.push(el.children[i]);
+                collect(el.children[i], arr);
+            }
+        })(src, srcNodes);
+        (function collect(el, arr) {
+            for (var i = 0; i < el.children.length; i++) {
+                arr.push(el.children[i]);
+                collect(el.children[i], arr);
+            }
+        })(clone, cloneNodes);
+        for (var i = 0; i < srcNodes.length; i++) {
+            var cs = window.getComputedStyle(srcNodes[i]);
+            var st = cloneNodes[i].style;
+            for (var j = 0; j < cs.length; j++) {
+                var prop = cs[j];
+                // 跳过会破坏布局的快照型属性（行高盒尺寸等由 flex 自然撑开）
+                if (prop === 'width' || prop === 'height' || prop === 'position' ||
+                    prop === 'top' || prop === 'left' || prop === 'right' || prop === 'bottom') continue;
+                var val = cs.getPropertyValue(prop);
+                // 外部资源引用（纹理图等）在 foreignObject 内会污染画布 → 置空
+                if (val.indexOf('url(') !== -1) val = 'none';
+                st.setProperty(prop, val);
+            }
+            // var() 在序列化后失效，计算样式已是具体值；margin collapse 由 flex 避免
+            cloneNodes[i].removeAttribute('class');
+            if (cloneNodes[i].tagName === 'IMG') {
+                cloneNodes[i].setAttribute('width', String(srcNodes[i].clientWidth || 56));
+                cloneNodes[i].setAttribute('height', String(srcNodes[i].clientHeight || 56));
+            }
+        }
+        clone.setAttribute('xmlns', 'http://www.w3.org/1999/xhtml');
+        clone.style.width = src.clientWidth + 'px';
+        clone.style.margin = '0';
+        return clone;
+    }
+
+    // ── 例图转 data-URI（同源 fetch，避免 foreignObject 画布污染） ──
+    function inlineImages(clone) {
+        var imgs = Array.prototype.slice.call(clone.querySelectorAll('img'));
+        return imgs.reduce(function(p, img) {
+            return p.then(function() {
+                return fetch(img.src).then(function(r) { return r.blob(); })
+                    .then(function(blob) {
+                        return new Promise(function(resolve) {
+                            var fr = new FileReader();
+                            fr.onload = function() { img.src = fr.result; resolve(); };
+                            fr.onerror = function() { img.remove(); resolve(); };
+                            fr.readAsDataURL(blob);
+                        });
+                    })
+                    .catch(function() { img.remove(); });
+            });
+        }, Promise.resolve());
+    }
+
+    // ── SVG foreignObject → canvas → blob（T22.19 自研导出器，scale=2） ──
+    function renderToBlob() {
+        var src = document.getElementById('pl-menu');
+        var clone = buildStyledClone();
+        if (!clone) return Promise.reject(new Error('menu not found'));
+        return inlineImages(clone).then(function() {
+            var w = src.clientWidth;
+            var h = src.clientHeight;
+            var holder = document.createElement('div');
+            holder.appendChild(clone);
+            var xhtml = new XMLSerializer().serializeToString(clone);
+            var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="' + w + '" height="' + h + '">' +
+                      '<foreignObject width="100%" height="100%">' + xhtml + '</foreignObject></svg>';
+            // data: URI 加载：Chrome 对含 foreignObject 的 SVG 走 blob: URL 会污染画布（toBlob SecurityError）
+            var dataUrl = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+            return new Promise(function(resolve, reject) {
+                var image = new Image();
+                image.onload = function() {
+                    var canvas = document.createElement('canvas');
+                    canvas.width = w * EXPORT_SCALE;
+                    canvas.height = h * EXPORT_SCALE;
+                    var ctx = canvas.getContext('2d');
+                    ctx.scale(EXPORT_SCALE, EXPORT_SCALE);
+                    ctx.drawImage(image, 0, 0);
+                    canvas.toBlob(function(blob) {
+                        if (blob) resolve(blob); else reject(new Error('toBlob failed'));
+                    }, 'image/png');
+                };
+                image.onerror = function() { reject(new Error('svg render failed')); };
+                image.src = dataUrl;
+            });
+        });
+    }
+
+    function dateStamp() {
+        var d = new Date();
+        var m = String(d.getMonth() + 1).padStart(2, '0');
+        var day = String(d.getDate()).padStart(2, '0');
+        return '' + d.getFullYear() + m + day;
+    }
+
+    function withBusy(btn, fn) {
+        if (exporting) return;
+        exporting = true;
+        if (btn) { btn.disabled = true; }
+        fn().catch(function(err) {
+            console.error('[pricelist export]', err);
+            showToast('导出失败：' + (err && err.message ? err.message : '未知错误'), 'error');
+        }).then(function() {
+            exporting = false;
+            if (btn) { btn.disabled = false; }
+        });
+    }
+
+    window.pl_downloadPng = function(btn) {
+        withBusy(btn, function() {
+            // Spec 31：卡片视图下改 helper 渲染 #pl-menu 恒 640px；长条视图现有路径一字不动
+            var cardsEl = document.getElementById('pl-cards');
+            var isCards = cardsEl && !cardsEl.hidden;
+            var renderPromise = isCards
+                ? renderOffscreenToBlob(document.getElementById('pl-menu'), 640)
+                : renderToBlob();
+            return renderPromise.then(function(blob) {
+                var a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = '价目表-' + dateStamp() + '.png';
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                setTimeout(function() { URL.revokeObjectURL(a.href); }, 3000);
+                showToast('PNG 已下载', 'success');
+            });
+        });
+    };
+
+    // ── Spec 31 卡 146：唯一离屏渲染助手（收敛 renderFragmentToBlob + buildStyledClone） ──
+    // srcNode: 任意 DOM 节点（可来自 hidden 容器）；width: 导出 CSS 宽度（默认 640，产物 1280@2x）
+    function renderOffscreenToBlob(srcNode, width) {
+        if (width === undefined) width = 640;
+        // 1. 建离屏 holder：className='tool-pricelist' + 从 #pl-menu 继承背景/文字/字体
+        var holder = document.createElement('div');
+        holder.className = 'tool-pricelist';
+        var menu = document.getElementById('pl-menu');
+        var holderStyle = 'position:fixed;left:-9999px;top:0;width:' + width + 'px;';
+        if (menu) {
+            var mcs = window.getComputedStyle(menu);
+            holderStyle += 'background:' + mcs.backgroundColor +
+                ';color:' + mcs.color +
+                ';font-family:' + mcs.fontFamily +
+                ';font-size:' + mcs.fontSize +
+                ';padding:' + mcs.padding + ';';
+        }
+        holder.style.cssText = holderStyle;
+        // 2. cloneNode(true) 挂进 holder 真实排版（规避 display:none 源 computedStyle 不可靠 §6.8）
+        var clone = srcNode.cloneNode(true);
+        // 移除单卡下载按钮（不应出现在导出 PNG 中）
+        var dlBtns = clone.querySelectorAll('.pl-card-dl-btn');
+        for (var b = 0; b < dlBtns.length; b++) dlBtns[b].remove();
+        holder.appendChild(clone);
+        document.body.appendChild(holder);
+        // 3. img.decode() 等待（消除解码竞态 §6.6）
+        var imgs = Array.prototype.slice.call(holder.querySelectorAll('img'));
+        var decodePromises = imgs.map(function(img) {
+            return img.decode().catch(function() { /* 忽略解码失败 */ });
+        });
+        return Promise.all(decodePromises).then(function() {
+            // 4. 再克隆 holder 做 computedStyle 内联（同 buildStyledClone 逻辑）
+            var exportClone = holder.cloneNode(true);
+            // 根节点定位强制 static/auto（收敛 Spec 30 两修复点）
+            exportClone.style.position = 'static';
+            exportClone.style.left = '';
+            exportClone.style.top = '';
+            var srcNodes = [holder];
+            var cloneNodes = [exportClone];
+            (function collect(el, arr) {
+                for (var i = 0; i < el.children.length; i++) {
+                    arr.push(el.children[i]);
+                    collect(el.children[i], arr);
+                }
+            })(holder, srcNodes);
+            (function collect(el, arr) {
+                for (var i = 0; i < el.children.length; i++) {
+                    arr.push(el.children[i]);
+                    collect(el.children[i], arr);
+                }
+            })(exportClone, cloneNodes);
+            for (var i = 0; i < srcNodes.length; i++) {
+                var cs = window.getComputedStyle(srcNodes[i]);
+                var st = cloneNodes[i].style;
+                for (var j = 0; j < cs.length; j++) {
+                    var prop = cs[j];
+                    if (prop === 'width' || prop === 'height' || prop === 'position' ||
+                        prop === 'top' || prop === 'left' || prop === 'right' || prop === 'bottom') continue;
+                    var val = cs.getPropertyValue(prop);
+                    if (val.indexOf('url(') !== -1) val = 'none';
+                    st.setProperty(prop, val);
+                }
+                cloneNodes[i].removeAttribute('class');
+                if (cloneNodes[i].tagName === 'IMG') {
+                    cloneNodes[i].setAttribute('width', String(srcNodes[i].clientWidth || 56));
+                    cloneNodes[i].setAttribute('height', String(srcNodes[i].clientHeight || 56));
+                }
+            }
+            exportClone.setAttribute('xmlns', 'http://www.w3.org/1999/xhtml');
+            exportClone.style.width = width + 'px';
+            exportClone.style.margin = '0';
+            // 5. 图片转 dataURI + SVG foreignObject → canvas 2x → blob
+            return inlineImages(exportClone).then(function() {
+                var w = width;
+                var h = holder.clientHeight;
+                var xhtml = new XMLSerializer().serializeToString(exportClone);
+                var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="' + w + '" height="' + h + '">' +
+                          '<foreignObject width="100%" height="100%">' + xhtml + '</foreignObject></svg>';
+                var dataUrl = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+                return new Promise(function(resolve, reject) {
+                    var image = new Image();
+                    image.onload = function() {
+                        var canvas = document.createElement('canvas');
+                        canvas.width = w * EXPORT_SCALE;
+                        canvas.height = h * EXPORT_SCALE;
+                        var ctx = canvas.getContext('2d');
+                        ctx.scale(EXPORT_SCALE, EXPORT_SCALE);
+                        ctx.drawImage(image, 0, 0);
+                        canvas.toBlob(function(blob) {
+                            if (blob) resolve(blob); else reject(new Error('toBlob failed'));
+                        }, 'image/png');
+                    };
+                    image.onerror = function() { reject(new Error('svg render failed')); };
+                    image.src = dataUrl;
+                });
+            });
+        }).finally(function() {
+            holder.remove();
+        });
+    }
+
+    // ── Spec 31 卡 146：按分类导出——遍历 #pl-cards .pl-card，恒 640px（D3） ──
+    window.pl_downloadByCategory = function(btn) {
+        withBusy(btn, function() {
+            var cardsContainer = document.getElementById('pl-cards');
+            if (!cardsContainer) return Promise.reject(new Error('cards not found'));
+            var cards = cardsContainer.querySelectorAll('.pl-card');
+            if (cards.length === 0) return Promise.reject(new Error('no categories'));
+            var ds = dateStamp();
+            var chain = Promise.resolve();
+            cards.forEach(function(card, idx) {
+                var catName = card.dataset.cat || ('分类' + (idx + 1));
+                var safeName = catName.replace(/[\/\\<>:"|?*]/g, '_');
+                chain = chain.then(function() {
+                    return renderOffscreenToBlob(card, 640).then(function(blob) {
+                        var a = document.createElement('a');
+                        a.href = URL.createObjectURL(blob);
+                        a.download = '价目表_' + safeName + '_' + ds + '.png';
+                        document.body.appendChild(a);
+                        a.click();
+                        a.remove();
+                        setTimeout(function() { URL.revokeObjectURL(a.href); }, 3000);
+                        return new Promise(function(r) { setTimeout(r, 500); });
+                    });
+                });
+            });
+            return chain.then(function() {
+                showToast('已导出 ' + cards.length + ' 个分类 PNG', 'success');
+            });
+        });
+    };
+
+    // ── Spec 31 D4：单卡下载按钮（与批量分类导出同一路径） ──
+    window.pl_downloadCard = function(btn) {
+        var card = btn.closest('.pl-card');
+        if (!card) return;
+        withBusy(btn, function() {
+            var catName = card.dataset.cat || '分类';
+            var safeName = catName.replace(/[\/\\<>:"|?*]/g, '_');
+            return renderOffscreenToBlob(card, 640).then(function(blob) {
+                var a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = '价目表_' + safeName + '_' + dateStamp() + '.png';
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                setTimeout(function() { URL.revokeObjectURL(a.href); }, 3000);
+                showToast('已下载 ' + catName, 'success');
+            });
+        });
+    };
+
+    // ── 视图切换（Spec 31 D1/D5：卡片⇄长条，默认长条 + localStorage 记忆） ──
+    var VIEW_KEY = 'pl_view_mode';
+
+    function applyView(mode) {
+        var menu = document.getElementById('pl-menu');
+        var cards = document.getElementById('pl-cards');
+        var stripBtn = document.getElementById('pl-view-strip-btn');
+        var cardsBtn = document.getElementById('pl-view-cards-btn');
+        if (!menu || !cards) return;
+        var isCards = (mode === 'cards');
+        menu.toggleAttribute('hidden', isCards);
+        cards.toggleAttribute('hidden', !isCards);
+        [[stripBtn, !isCards], [cardsBtn, isCards]].forEach(function(pair) {
+            var b = pair[0];
+            if (!b) return;
+            b.classList.toggle('btn-primary', pair[1]);
+            b.classList.toggle('btn-ghost', !pair[1]);
+        });
+        // 整图导出（复制/下载 PNG）仅长条视图可用；卡片视图下隐藏。
+        // 内联 style 兜底：旧缓存 CSS 缺 [hidden]{display:none!important} 时，
+        // .btn 的 display:inline-flex 会覆盖 UA 规则导致 hidden 失效
+        var copyBtn = document.getElementById('pl-copy-btn');
+        var dlBtn = document.getElementById('pl-dl-btn');
+        [[copyBtn, true], [dlBtn, true]].forEach(function(pair) {
+            var el = pair[0];
+            if (!el) return;
+            el.toggleAttribute('hidden', isCards);
+            el.style.display = isCards ? 'none' : '';
+        });
+    }
+
+    window.pl_setView = function(mode) {
+        applyView(mode);
+        try { localStorage.setItem(VIEW_KEY, mode); } catch (e) { /* 隐私模式忽略 */ }
+    };
+
+    (function initView() {
+        var mode = 'strip';  // D5：默认长条
+        try {
+            if (localStorage.getItem(VIEW_KEY) === 'cards') mode = 'cards';
+        } catch (e) { /* 隐私模式忽略 */ }
+        applyView(mode);
+    })();
+
+    window.pl_copyImage = function(btn) {
+        withBusy(btn, function() {
+            // Spec 31：卡片视图下改 helper 渲染 #pl-menu 恒 640px
+            var cardsEl = document.getElementById('pl-cards');
+            var isCards = cardsEl && !cardsEl.hidden;
+            var getBlob = function() {
+                return isCards
+                    ? renderOffscreenToBlob(document.getElementById('pl-menu'), 640)
+                    : renderToBlob();
+            };
+            if (!navigator.clipboard || typeof ClipboardItem === 'undefined') {
+                return getBlob().then(function(blob) {
+                    var a = document.createElement('a');
+                    a.href = URL.createObjectURL(blob);
+                    a.download = '价目表-' + dateStamp() + '.png';
+                    a.click();
+                    showToast('当前浏览器不支持复制图片，已改为下载', 'info');
+                });
+            }
+            return getBlob().then(function(blob) {
+                return navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+            }).then(function() {
+                showToast('图片已复制到剪贴板', 'success');
+            }).catch(function() {
+                return getBlob().then(function(blob) {
+                    var a = document.createElement('a');
+                    a.href = URL.createObjectURL(blob);
+                    a.download = '价目表-' + dateStamp() + '.png';
+                    a.click();
+                    showToast('复制失败，已改为下载', 'info');
+                });
+            });
+        });
+    };
+})();
+</script>
+{% endblock %}

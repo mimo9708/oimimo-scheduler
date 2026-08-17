@@ -1,0 +1,46 @@
+{# Spec 26 收款流水卡片（详情整页与 /payments/panel 局部刷新同源；仅 installment 单渲染。
+   交互逻辑在 app.js 事件委托（卡片可被 innerHTML 局部替换，不依赖 htmx 属性）。 #}
+<div class="card" id="order-payments-card" data-order-id="{{ order.id }}" style="margin-bottom:var(--space-md);">
+    <div class="card-header">收款流水
+        <span class="payments-mode-tag">分期 · 按到账月份计收入</span>
+    </div>
+    <div class="card-body">
+        {# D4 只进不退：状态已结算但 Σ笔 < 净额−0.01（删笔不回退状态）→ 呈现层提示 #}
+        {% if payments_inconsistent %}
+        <div class="payments-warn">
+            收款状态为「{{ order.payment_status|e }}」，但已到账合计（¥{{ "%.2f"|format(payments_received) }}）低于应收净额（¥{{ "%.2f"|format(order.actual_received or 0) }}）。
+            删除收款记录不会自动回退状态（只进不退），请核对后手动调整收款状态。
+        </div>
+        {% endif %}
+
+        <div class="payments-list">
+            {% for p in payments %}
+            <div class="payment-row" data-payment-id="{{ p.id }}">
+                <span class="payment-date mono">{{ (p.paid_at or '')[:10]|e }}</span>
+                <span class="payment-amount mono">+¥{{ "%.2f"|format(p.amount) }}</span>
+                <span class="payment-note">{{ p.note|e if p.note else '—' }}</span>
+                <span class="payment-actions">
+                    <button type="button" class="btn-link btn-payments-edit">编辑</button>
+                    <button type="button" class="btn-link btn-payments-del">删除</button>
+                </span>
+            </div>
+            {% else %}
+            <div class="payments-empty">暂无到账记录 — 在下方记第一笔（如定金）</div>
+            {% endfor %}
+        </div>
+
+        <div class="payments-summary">
+            <span class="payments-summary-item">应收净额 <strong class="mono">¥{{ "%.2f"|format(order.actual_received or 0) }}</strong></span>
+            <span class="payments-summary-item">已到账 <strong class="mono" style="color:var(--color-success);">¥{{ "%.2f"|format(payments_received) }}</strong></span>
+            <span class="payments-summary-item">待收 <strong class="mono" style="{% if payments_expected > 0 %}color:var(--color-warning);{% else %}color:var(--color-text-tertiary);{% endif %}">¥{{ "%.2f"|format(payments_expected) }}</strong></span>
+        </div>
+
+        {# 新增一行收款（提交走 task-108 POST 路由；校验 PaymentRecord 服务端兜底）#}
+        <div class="payments-add-row">
+            <input type="date" class="payments-add-date" aria-label="到账日期">
+            <input type="number" class="payments-add-amount" step="0.01" min="0" placeholder="金额 (¥)">
+            <input type="text" class="payments-add-note" maxlength="500" placeholder="备注（定金/阶段款/尾款，可选）">
+            <button type="button" class="btn btn-primary btn-sm btn-payments-add">记一笔</button>
+        </div>
+    </div>
+</div>

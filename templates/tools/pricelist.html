@@ -1,0 +1,311 @@
+{# 价目表编辑视图（Spec 22 / 任务卡 92 T22.17）：分类分节 + 拖拽排序 + 例图管理 + meta 卡片 #}
+{% extends "tools/_shell.html" %}
+
+{% block tool_actions %}
+<a href="/tools/pricelist/" class="btn btn-ghost">完成，查看预览</a>
+<button type="button" class="btn btn-primary" onclick="openCenterModal('/tools/pricelist/new', '新建价目项目')">+ 新建项目</button>
+{% endblock %}
+
+{% block tool_content %}
+<div class="pl-edit-banner">
+    <i data-lucide="pencil-line"></i>
+    <span>编辑模式：拖拽排序 / 例图管理（每项目最多 {{ img_limit }} 张）/ 菜单标题与附注。保存后点右上「完成，查看预览」看成品。</span>
+</div>
+<div id="pl-app">
+    {% include "tools/_pricelist_board.html" %}
+</div>
+{# 例图上传共享 file input（单例图语义） #}
+<input type="file" id="pl-file" accept=".png,.jpg,.jpeg,.gif,.webp,.bmp" hidden>
+{% endblock %}
+
+{% block scripts %}
+{{ super() }}
+<style>
+    .tool-pricelist .pl-meta-card {
+        display: flex;
+        align-items: flex-end;
+        gap: var(--space-md);
+        flex-wrap: wrap;
+        padding: var(--space-md);
+        margin-bottom: var(--space-lg);
+    }
+    .tool-pricelist .pl-meta-field { display: flex; flex-direction: column; gap: 4px; }
+    .tool-pricelist .pl-meta-field label {
+        font-size: 0.75rem;
+        color: var(--color-text-tertiary);
+        font-weight: 600;
+    }
+    .tool-pricelist .pl-meta-field input, .tool-pricelist .pl-meta-field textarea {
+        padding: 6px 10px;
+        border: 1px solid var(--color-border);
+        border-radius: var(--radius-sm);
+        background: var(--color-bg);
+        color: var(--color-text);
+        font-size: 0.84rem;
+        font-family: inherit;
+    }
+    .tool-pricelist #pl-meta-title { width: 220px; }
+    .tool-pricelist #pl-meta-note { width: 340px; resize: vertical; }
+    .tool-pricelist .pl-cat { margin-bottom: var(--space-lg); }
+    .tool-pricelist .pl-cat-title {
+        font-size: 0.82rem;
+        font-weight: 700;
+        color: var(--color-text-secondary);
+        margin: 0 0 var(--space-sm);
+        display: flex;
+        align-items: center;
+        gap: 6px;
+    }
+    .tool-pricelist .pl-cat-title::after {
+        content: '';
+        flex: 1;
+        height: 1px;
+        background: var(--color-border);
+    }
+    .tool-pricelist .pl-cat-body { display: flex; flex-direction: column; gap: var(--space-xs); }
+    .tool-pricelist .pl-row {
+        display: grid;
+        grid-template-columns: auto 1fr 110px 60px 1.2fr auto;
+        gap: var(--space-sm);
+        align-items: center;
+        padding: var(--space-sm) var(--space-md);
+    }
+    .tool-pricelist .pl-row.pl-dragging { opacity: 0.5; }
+    .tool-pricelist .pl-edit-banner {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 9px 14px;
+        margin-bottom: var(--space-md);
+        background: var(--color-surface);
+        border: 1px solid var(--color-border);
+        border-radius: var(--radius-md);
+        font-size: 0.78rem;
+        color: var(--color-text-secondary);
+    }
+    .tool-pricelist .pl-edit-banner svg {
+        width: 14px;
+        height: 14px;
+        flex-shrink: 0;
+        color: var(--color-text-tertiary);
+    }
+    .tool-pricelist .pl-thumb-empty {
+        width: 44px;
+        height: 44px;
+        border-radius: var(--radius-sm);
+        border: 1px dashed var(--color-border-strong);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--color-text-tertiary);
+        cursor: pointer;
+    }
+    .tool-pricelist .pl-thumb-empty svg { width: 16px; height: 16px; }
+    .tool-pricelist .pl-name { font-weight: 600; font-size: 0.88rem; color: var(--color-text); word-break: break-all; }
+    .tool-pricelist .pl-price { font-weight: 700; font-size: 0.9rem; color: var(--color-text); text-align: right; }
+    .tool-pricelist .pl-unit { font-size: 0.75rem; color: var(--color-text-tertiary); }
+    .tool-pricelist .pl-desc {
+        font-size: 0.78rem;
+        color: var(--color-text-secondary);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .tool-pricelist .pl-row-actions {
+        display: flex;
+        gap: 4px;
+        align-items: center;
+        flex-shrink: 0;
+    }
+    .tool-pricelist .pl-drag-handle {
+        cursor: grab;
+        color: var(--color-text-tertiary);
+        display: inline-flex;
+        padding: 2px;
+    }
+    .tool-pricelist .pl-drag-handle svg { width: 14px; height: 14px; }
+    @media (max-width: 860px) {
+        .tool-pricelist .pl-row { grid-template-columns: auto 1fr auto; }
+        .tool-pricelist .pl-desc, .tool-pricelist .pl-unit { display: none; }
+    }
+</style>
+<script>
+(function() {
+    var sortables = [];
+
+    // ── 拖拽排序：分类内 SortableJS，onEnd 收集 ids → dirtyFetch POST reorder ──
+    window.pl_initSortable = function() {
+        sortables.forEach(function(s) { try { s.destroy(); } catch (e) {} });
+        sortables = [];
+        if (typeof Sortable === 'undefined') return;
+
+        // ── Spec 28 Task 124：分类级拖拽（#pl-cat-list > .pl-cat）──
+        var catList = document.getElementById('pl-cat-list');
+        if (catList) {
+            sortables.push(Sortable.create(catList, {
+                handle: '.pl-cat-drag-handle',
+                draggable: '.pl-cat',
+                animation: 150,
+                onStart: function() { catList.classList.add('pl-cat-sorting'); },
+                onEnd: function() {
+                    catList.classList.remove('pl-cat-sorting');
+                    pl_saveCatOrder();
+                }
+            }));
+        }
+
+        // ── 行级拖拽（分类内项目排序）──
+        document.querySelectorAll('#pl-app .pl-cat-body').forEach(function(body) {
+            sortables.push(Sortable.create(body, {
+                handle: '.pl-drag-handle',
+                animation: 150,
+                onEnd: function() {
+                    var ids = Array.prototype.map.call(body.querySelectorAll('.pl-row'), function(row) {
+                        return parseInt(row.dataset.id, 10);
+                    });
+                    dirtyFetch('/tools/pricelist/reorder', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ ids: ids })
+                    }).then(function(res) {
+                        if (!res.ok) showToast('排序保存失败', 'error');
+                    }).catch(function() { showToast('排序保存失败', 'error'); });
+                }
+            }));
+        });
+        // 例图组内拖拽排序（嵌套 Sortable：行拖拽走 .pl-drag-handle 手柄，互不干扰）
+        document.querySelectorAll('#pl-app .pl-thumbs').forEach(function(box) {
+            sortables.push(Sortable.create(box, {
+                draggable: '.pl-thumb-item',
+                animation: 150,
+                onEnd: function() {
+                    var ids = Array.prototype.map.call(box.querySelectorAll('.pl-thumb-item'), function(el) {
+                        return parseInt(el.dataset.imgid, 10);
+                    });
+                    if (ids.length < 2) return;
+                    dirtyFetch('/tools/pricelist/images/reorder', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ ids: ids })
+                    }).then(function(res) {
+                        if (!res.ok) showToast('例图排序保存失败', 'error');
+                    }).catch(function() { showToast('例图排序保存失败', 'error'); });
+                }
+            }));
+        });
+    };
+
+    // ── 分类排序保存（Spec 28 Task 124）：收集 #pl-cat-list 下 .pl-cat 顺序 → POST ──
+    window.pl_saveCatOrder = function() {
+        var cats = Array.prototype.map.call(
+            document.querySelectorAll('#pl-cat-list > .pl-cat'),
+            function(el) { return el.dataset.cat; }
+        );
+        dirtyFetch('/tools/pricelist/categories/reorder', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ categories: cats })
+        }).then(function(res) {
+            if (res.ok) showToast('分类顺序已保存', 'success');
+            else showToast('分类排序保存失败', 'error');
+        }).catch(function() { showToast('分类排序保存失败', 'error'); });
+    };
+
+    // ── 分类上下移动按钮（Spec 28 Task 124）──
+    window.pl_moveCat = function(btn, dir) {
+        var cat = btn.closest('.pl-cat');
+        var list = cat.parentElement;
+        var cats = Array.prototype.slice.call(list.querySelectorAll(':scope > .pl-cat'));
+        var idx = cats.indexOf(cat);
+        var newIdx = idx + dir;
+        if (newIdx < 0 || newIdx >= cats.length) return;
+        if (dir > 0) {
+            list.insertBefore(cats[newIdx], cat);
+        } else {
+            list.insertBefore(cat, cats[newIdx]);
+        }
+        pl_saveCatOrder();
+    };
+
+    // ── 看板整区刷新：例图上传/删除后 fetch 片段替换 #pl-app（多图语义下就地 DOM 拼接不可靠） ──
+    window.pl_refreshBoard = function() {
+        return fetch('/tools/pricelist/board').then(function(r) { return r.text(); }).then(function(html) {
+            var app = document.getElementById('pl-app');
+            if (app) app.innerHTML = html;
+            if (window.lucide) lucide.createIcons();
+            window.pl_initSortable();
+        });
+    };
+
+    // ── 例图上传：共享 file input，change → FormData dirtyFetch，成功后整区刷新 ──
+    window.pl_uploadClick = function(id) {
+        window.__plPendingId = id;
+        document.getElementById('pl-file').click();
+    };
+
+    var fileInput = document.getElementById('pl-file');
+    if (fileInput) {
+        fileInput.addEventListener('change', function() {
+            var id = window.__plPendingId;
+            var file = fileInput.files && fileInput.files[0];
+            fileInput.value = '';
+            if (!id || !file) return;
+            var fd = new FormData();
+            fd.append('image', file);
+            showToast('上传中…', 'info');
+            dirtyFetch('/tools/pricelist/' + id + '/upload-example', { method: 'POST', body: fd })
+                .then(function(res) { return res.json(); })
+                .then(function(d) {
+                    if (d.success) {
+                        showToast('例图已上传', 'success');
+                        pl_refreshBoard();
+                    } else {
+                        showToast(d.error || '上传失败', 'error');
+                    }
+                })
+                .catch(function() { showToast('上传失败', 'error'); });
+        });
+    }
+
+    // ── 删除单张例图 ──
+    window.pl_removeImage = function(imgId) {
+        if (!confirm('删除这张例图？')) return;
+        dirtyFetch('/tools/pricelist/images/' + imgId + '/delete', { method: 'POST' })
+            .then(function(res) { return res.json(); })
+            .then(function(d) {
+                if (d.success) {
+                    showToast('例图已删除', 'success');
+                    pl_refreshBoard();
+                } else {
+                    showToast(d.error || '操作失败', 'error');
+                }
+            });
+    };
+
+    // ── meta 卡片：菜单标题/附注保存即存 settings ──
+    window.pl_saveMeta = function() {
+        var title = document.getElementById('pl-meta-title');
+        var note = document.getElementById('pl-meta-note');
+        var fd = new FormData();
+        fd.append('title', title ? title.value : '');
+        fd.append('note', note ? note.value : '');
+        dirtyFetch('/tools/pricelist/meta', { method: 'POST', body: fd })
+            .then(function(res) { return res.json(); })
+            .then(function(d) {
+                if (d.success) showToast('菜单信息已保存', 'success');
+                else showToast('保存失败', 'error');
+            })
+            .catch(function() { showToast('保存失败', 'error'); });
+    };
+
+    window.pl_initSortable();
+    // 写操作后 #pl-app 整区重渲染 → 重新绑定拖拽
+    document.addEventListener('htmx:afterSettle', function(e) {
+        var t = e.detail && e.detail.target;
+        if (t && (t.id === 'pl-app' || (t.closest && t.closest('#pl-app')))) {
+            window.pl_initSortable();
+        }
+    });
+})();
+</script>
+{% endblock %}

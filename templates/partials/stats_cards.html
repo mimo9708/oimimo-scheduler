@@ -20,11 +20,11 @@
         {% if stats.active_change is none %}<div class="stat-card-label">活跃订单</div>{% endif %}
     </div>
 
-    <div class="stat-card stat-card-clickable" data-metric="income" data-label="{{ '收入' if stats.preset in ['all', 'custom'] else stats.range_label + '收入' }}">
-        <div class="stat-card-label"><span class="hint" title="按排期月份">{{ '收入' if stats.preset in ['all', 'custom'] else stats.range_label + '收入' }}</span></div>
+    <div class="stat-card stat-card-clickable" data-metric="income" data-label="{{ '到账' if stats.preset in ['all', 'custom'] else stats.range_label + '到账' }}">
+        <div class="stat-card-label"><span class="hint" title="Spec 26：分期按到账日，整单按排期月">{{ '到账' if stats.preset in ['all', 'custom'] else stats.range_label + '到账' }}</span></div>
         <div class="stat-card-value" id="stat-income">¥{{ "%.0f"|format(stats.income) }}</div>
         {{ change_line(stats.income_change) }}
-        {% if stats.income_change is none %}<div class="stat-card-label">已归档实收（净额）</div>{% endif %}
+        {% if stats.income_change is none %}<div class="stat-card-label">已到账金额（净额）</div>{% endif %}
     </div>
 
     <div class="stat-card stat-card-clickable" data-metric="overdue" data-label="逾期">
@@ -40,11 +40,11 @@
         {% if stats.completed_change is none %}<div class="stat-card-label">已归档订单（不含退单）</div>{% endif %}
     </div>
 
-    <div class="stat-card stat-card-clickable" data-metric="expected" data-label="预计收入">
-        <div class="stat-card-label">预计收入</div>
+    <div class="stat-card stat-card-clickable" data-metric="expected" data-label="待收金额">
+        <div class="stat-card-label"><span class="hint" title="Spec 26：待收 = 应收净额 − 已到账">待收金额</span></div>
         <div class="stat-card-value" id="stat-expected">¥{{ "%.0f"|format(stats.expected_income) }}</div>
         {{ change_line(stats.expected_change) }}
-        {% if stats.expected_change is none %}<div class="stat-card-label">活跃订单实收（净额）</div>{% endif %}
+        {% if stats.expected_change is none %}<div class="stat-card-label">活跃订单待收（净额−已到账）</div>{% endif %}
     </div>
 </div>
 {% if stats.is_custom_range %}

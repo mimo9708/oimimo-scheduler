@@ -17,6 +17,7 @@ function openCenterModal(url, title) {
 }
 
 function closeCenterModal() {
+    clearFormDirty();
     document.getElementById('center-modal').classList.add('hidden');
     var actEl = document.getElementById('center-modal-actions'); if (actEl) actEl.innerHTML = '';
     // 刷新日历
@@ -66,7 +67,6 @@ document.addEventListener('keydown', function(e) {
    支持组合键（Ctrl+N / Escape）与 g 前缀序列（g h）。既有各浮层 Escape 关闭逻辑保留。
    ═══════════════════════════════════════════════════════════ */
 (function () {
-    var SC = window.__SHORTCUTS || {};
     var NAV_URLS = {
         nav_home: '/', nav_income: '/income', nav_calendar: '/calendar',
         nav_orders: '/orders', nav_kanban: '/orders/kanban',
@@ -74,13 +74,22 @@ document.addEventListener('keydown', function(e) {
     };
 
     // 构建：组合键映射 combo->func；序列映射 "g x"->func
-    var comboMap = {}, seqMap = {};
-    Object.keys(SC).forEach(function (func) {
-        var v = String(SC[func] || '').trim().toLowerCase().replace(/\s+/g, ' ');
-        if (!v) return;
-        if (v.indexOf(' ') !== -1) seqMap[v] = func;
-        else comboMap[v] = func;
-    });
+    // 卡 156：app.js 已移入 head，执行时 window.__SHORTCUTS（base.html body 尾部内联脚本）
+    // 尚未定义——改为首次按键惰性构建；runPageInit 每次页面初始化时重置缓存，
+    // 保证设置页修改快捷键后（boosted 导航重渲染 __SHORTCUTS）立即生效
+    var comboMap = null, seqMap = null;
+    function ensureMaps() {
+        if (comboMap) return;
+        comboMap = {}; seqMap = {};
+        var SC = window.__SHORTCUTS || {};
+        Object.keys(SC).forEach(function (func) {
+            var v = String(SC[func] || '').trim().toLowerCase().replace(/\s+/g, ' ');
+            if (!v) return;
+            if (v.indexOf(' ') !== -1) seqMap[v] = func;
+            else comboMap[v] = func;
+        });
+    }
+    window.__resetShortcutMaps = function() { comboMap = null; seqMap = null; };
 
     function eventCombo(e) {
         var parts = [];
@@ -134,6 +143,7 @@ document.addEventListener('keydown', function(e) {
     var pendingPrefix = null, pendingAt = 0;
 
     document.addEventListener('keydown', function (e) {
+        ensureMaps();
         var combo = eventCombo(e);
         // close/关闭浮层：即使在输入框也允许（既有各浮层 Escape 处理器仍会各自兜底）
         if (comboMap[combo] === 'close') { closeAnyOverlay(); return; }
@@ -199,6 +209,7 @@ function openEditDrawer(orderId) {
 }
 
 function closeDrawer() {
+    clearFormDirty();
     document.getElementById('edit-drawer').classList.add('hidden');
     // P19-F11 X1：编辑保存后按当前页面分发刷新（不再是统一只刷日历+统计卡）
     refreshCurrentView();
@@ -274,6 +285,86 @@ document.addEventListener('keydown', function(e) {
 
 
 /* ═══════════════════════════════════════════════════════════
+   卡 156：hx-boost 局部导航支持
+   1. runPageInit——页面初始化统一入口（整页加载与 boosted 导航共用）
+   2. updateSidebarActive——hx-preserve 保留旧侧边栏 HTML，active 高亮须手动更新
+   3. 脏表单导航拦截——POST 表单未保存修改时 boosted 导航 confirm
+   ═══════════════════════════════════════════════════════════ */
+
+// 会话级一次性监听绑定：boosted 导航会重复执行响应中的内联脚本（htmx executeScriptTags），
+// 模板内 document/window 级监听须经 onceBind 挂载，防每次导航重复绑定。
+window.__onceBound = window.__onceBound || {};
+function onceBind(target, type, key, fn) {
+    if (window.__onceBound[key]) return;
+    window.__onceBound[key] = true;
+    target.addEventListener(type, fn);
+}
+
+// 页面初始化统一入口：模板内联脚本定义 window.__pageInit，本函数在整页加载
+// （DOMContentLoaded）与 boosted 导航（htmx:afterSettle，此时新内联脚本已执行）
+// 两路径统一触发。
+function runPageInit() {
+    updateSidebarActive();
+    initImageUpload();                        // 幂等（zone.dataset.bound 守卫），无上传区页面直接 return
+    var path = window.location.pathname;
+    if (path === '/income' && typeof initIncomeLayout === 'function') initIncomeLayout();
+    if (typeof initModuleCustomizer === 'function') initModuleCustomizer(path);
+    // 快捷键缓存重置：设置页保存后（boosted 导航重渲染 __SHORTCUTS）下次按键重建
+    if (window.__resetShortcutMaps) window.__resetShortcutMaps();
+    // 消费式调用：调用后置 null——导航到未定义 __pageInit 的页面（详情/列表/画廊等）
+    // 时防误跑上一页残留初始化（会访问已不存在的元素）
+    var f = window.__pageInit;
+    window.__pageInit = null;
+    if (typeof f === 'function') f();
+}
+document.addEventListener('DOMContentLoaded', runPageInit);
+document.addEventListener('htmx:afterSettle', function(e) {
+    var d = e.detail || {};
+    if (d.requestConfig && d.requestConfig.boosted) runPageInit();
+});
+// 浏览器前进/后退：htmx 从历史缓存恢复页面走 htmx:historyRestore（afterSettle 无 boosted 标记），
+// 恢复内容的内联脚本此时已执行（__pageInit 就绪），须单独触发统一初始化
+// （探针实测事件序：historyCacheHit → swap → historyRestore）
+document.addEventListener('htmx:historyRestore', runPageInit);
+
+// 侧边栏 active 高亮：对齐 base.html Jinja 判断规则（前缀类 3 项，其余精确匹配）
+var SIDEBAR_PREFIX_PAGES = ['/customers', '/templates', '/tools'];
+function updateSidebarActive() {
+    var path = window.location.pathname;
+    document.querySelectorAll('#sidebar .nav-item').forEach(function(a) {
+        var href = a.getAttribute('href') || '';
+        if (!href || href === '#') return;
+        var active = (href === path) ||
+            (SIDEBAR_PREFIX_PAGES.indexOf(href) !== -1 && path.indexOf(href) === 0);
+        a.classList.toggle('active', active);
+    });
+}
+
+// 脏表单导航拦截：POST 表单（编辑/设置）内输入即标记，提交时清除；
+// boosted 导航为 AJAX GET 不触发 beforeunload，须在此 confirm（对齐原 pageshow 防护语义）
+document.addEventListener('input', function(e) {
+    var t = e.target;
+    if (!t || !t.closest) return;
+    var f = t.closest('form');
+    // 卡 156：method 属性为枚举但 getAttribute 返回源码大小写（如 "POST"），须 toLowerCase
+    if (f && ((f.getAttribute('method') || '').toLowerCase() === 'post' || f.hasAttribute('hx-post'))) {
+        window.__formDirty = true;
+    }
+}, true);
+document.addEventListener('submit', function() { window.__formDirty = false; }, true);
+function clearFormDirty() { window.__formDirty = false; }   // 模态框/抽屉取消关闭时清除误标记
+document.addEventListener('htmx:beforeRequest', function(e) {
+    var d = e.detail || {};
+    var cfg = d.requestConfig;
+    if (!cfg || !cfg.boosted) return;
+    if ((cfg.verb || 'GET').toUpperCase() !== 'GET') return;
+    if (window.__formDirty && !confirm('当前表单有未保存的修改，离开将丢失。确定离开？')) {
+        e.preventDefault();
+    }
+});
+
+
+/* ═══════════════════════════════════════════════════════════
    统计明细小票弹窗（超市小票风格）
    ═══════════════════════════════════════════════════════════ */
 
@@ -331,11 +422,7 @@ function openReceipt(metric, label, cardEl, extraParams) {
                 return;
             }
             body.innerHTML = d.items.map(function(it) {
-                return '<a class="receipt-row" href="/orders/' + it.id + '">'
-                    + '<span class="r-date">' + escHtml(it.date || '-') + '</span>'
-                    + '<span class="r-name">' + escHtml(it.project_name) + '</span>'
-                    + '<span class="r-amount">¥' + Number(it.amount).toLocaleString('zh-CN', { maximumFractionDigits: 0 }) + '</span>'
-                    + '</a>';
+                return _receiptRowHtml(it, metric);
             }).join('');
             document.getElementById('receipt-total').innerHTML =
                 '<span>共 ' + d.count + ' 单</span><span>合计 ¥' + Number(d.total).toLocaleString('zh-CN', { maximumFractionDigits: 0 }) + '</span>';
@@ -345,6 +432,29 @@ function openReceipt(metric, label, cardEl, extraParams) {
         .catch(function() {
             body.innerHTML = '<div class="receipt-empty">加载失败</div>';
         });
+}
+
+// Spec 26 task-110：小票行渲染（分期笔标签 + 待收卡分期单三数行）
+function _receiptRowHtml(it, metric) {
+    var isInst = it.payment_mode === 'installment';
+    var html = '<a class="receipt-row" href="/orders/' + it.id + '">'
+        + '<span class="r-date">' + escHtml(it.date || '-') + '</span>'
+        + '<span class="r-name">' + escHtml(it.project_name);
+    if (isInst) html += ' <span class="r-tag">分期</span>';
+    html += '</span>'
+        + '<span class="r-amount">¥' + Number(it.amount).toLocaleString('zh-CN', { maximumFractionDigits: 0 }) + '</span>';
+    // 待收金额小票：分期单按单列三数（应收净额 / 已到账 / 待收，两位小数）
+    if (metric === 'expected' && isInst) {
+        html += '<span class="r-sub">应收 ¥' + _receiptMoney(it.net_amount)
+             + ' · 已到 ¥' + _receiptMoney(it.received_amount)
+             + ' · 待收 ¥' + _receiptMoney(it.amount) + '</span>';
+    }
+    return html + '</a>';
+}
+
+// Spec 26 task-110：三数展示用两位小数（金额明细不四舍五入到整数）
+function _receiptMoney(n) {
+    return Number(n || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 // P20-F16：底部条码渲染（CODE128 格式，当前时间戳编码）
@@ -776,8 +886,8 @@ function initModuleCustomizer(pageKey) {
         applyModuleState(m.el, getModuleState(prefs, m.id));
     });
     buildModuleSettingsPanel(pageKey, modules);
-    // 点击面板外关闭
-    document.addEventListener('click', function(e) {
+    // 点击面板外关闭（卡 156：onceBind——boosted 导航每页初始化都会经过本函数，防重复挂载）
+    onceBind(document, 'click', 'module-panel-outside', function(e) {
         var panel = document.getElementById('module-settings-panel');
         if (!panel || !panel.classList.contains('open')) return;
         if (panel.contains(e.target) || (e.target.closest && e.target.closest('#module-settings-btn'))) return;
@@ -1036,12 +1146,17 @@ function checkForUpdate(force) {
 
 document.addEventListener('DOMContentLoaded', function() {
     // 甘特图: index.html 内联 | 日历: calendar.html 内联
-    initKanban();
+    // 卡 156：initKanban/initImageUpload/initIncomeLayout/initModuleCustomizer 已并入 runPageInit
+    // （页面初始化两路径统一入口），此处仅保留会话级一次性逻辑
     initSidebarState();
-    initImageUpload();
-    initIncomeLayout();                        // P21a 收入页自定义布局（须早于 P16h：网格先建，隐藏块才能正确摘除）
-    initModuleCustomizer(location.pathname);   // P16h 统计模块自定义显隐
     checkForUpdate(false);                     // #41/#46 启动自检更新（每会话一次，失败静默）
+
+    // Spec 32 D6：/orders/new 直接访问 → 后端 302 /?new=1 落地，此处自动开新建订单模态框并清参数
+    if ((location.pathname === '/' || location.pathname === '') && new URLSearchParams(location.search).get('new') === '1') {
+        var tpl = new URLSearchParams(location.search).get('template') || '';
+        openCenterModal(tpl ? '/orders/new?modal=1&template=' + encodeURIComponent(tpl) : '/orders/new?modal=1', '新建订单');
+        history.replaceState(null, '', location.pathname);   // 清 query 防刷新重复弹窗
+    }
 });
 
 /* ═══════════════════════════════════════════════════════════
@@ -1146,6 +1261,52 @@ document.addEventListener('orderDeleted', function() {
         window.location.href = '/orders';
     }
 });
+
+
+/* ═══════════════════════════════════════════════════════════
+   Spec 22 小工具平台 — 事件桥 + 最近使用
+   ═══════════════════════════════════════════════════════════ */
+
+// HX-Trigger `closeCenterModal`：服务端写成功后关闭居中模态
+document.addEventListener('closeCenterModal', function() {
+    closeCenterModal();
+});
+
+// HX-Trigger `showToast`：detail 可为字符串或 {message, type}
+document.addEventListener('showToast', function(e) {
+    var d = e && e.detail;
+    if (typeof d === 'string') {
+        showToast(d, 'success');
+        return;
+    }
+    d = d || {};
+    if (d.message) showToast(d.message, d.type || 'success');
+});
+
+// 工具表单 4xx 校验错误 → 错误片段换入请求目标（HTMX 默认不交换 4xx；
+// 仅作用于带 .tool-htmx-form 的表单，不影响既有页面行为）
+document.addEventListener('htmx:responseError', function(e) {
+    var d = e.detail || {};
+    var el = d.elt, xhr = d.xhr;
+    if (!el || !xhr || xhr.status < 400 || xhr.status >= 500) return;
+    var form = el.classList.contains('tool-htmx-form') ? el : (el.closest ? el.closest('.tool-htmx-form') : null);
+    if (!form) return;
+    var target = d.target || form;
+    target.innerHTML = xhr.responseText;
+    if (window.lucide) lucide.createIcons();
+});
+
+// 最近使用工具（localStorage `recent_tools`，上限 5；进入工具详情页时写入，D3）
+function recordRecentTool(slug, name, icon) {
+    if (!slug) return;
+    var list = [];
+    try { list = JSON.parse(localStorage.getItem('recent_tools') || '[]'); } catch (e) { list = []; }
+    if (!Array.isArray(list)) list = [];
+    list = list.filter(function(t) { return t && t.slug !== slug; });
+    list.unshift({ slug: slug, name: name, url: '/tools/' + slug + '/', icon: icon || 'puzzle' });
+    if (list.length > 5) list = list.slice(0, 5);
+    try { localStorage.setItem('recent_tools', JSON.stringify(list)); } catch (e) {}
+}
 
 
 /* ═══════════════════════════════════════════════════════════
@@ -1385,7 +1546,10 @@ function refreshStatsPreservingRange() {
         }
     } catch(e) {}
     var url = '/api/stats' + (params ? '?' + params : '');
-    htmx.ajax('GET', url, { target: '#stats-cards' });
+    // Spec 18 / 任务卡 78：无统计卡片的页面（如 /templates）跳过，避免 htmx:targetError 噪音
+    if (document.getElementById('stats-cards')) {
+        htmx.ajax('GET', url, { target: '#stats-cards' });
+    }
 }
 
 function fmtDateSt(d) {
@@ -1702,3 +1866,148 @@ function seriesColors(labels, colorMap) {
         return map[label] || chartFallbackColor(miss++);
     });
 }
+
+
+/* ═══════════════════════════════════════════════════════
+   Spec 26 分期收款：表单模式开关提示 + 详情页收款时间线/编辑器
+   （事件委托绑定在 document——卡片可被 innerHTML 局部替换，无需重新初始化；
+   写操作统一走 dirtyFetch + task-108 三路由，HX-Trigger 由 JS 自行处理）
+   ═══════════════════════════════════════════════════════ */
+
+// 表单「收款方式」开关：切分期显示提示条（五表单共用，内联 onchange 调用）
+function togglePaymentsModeHint(sel) {
+    var hint = sel.parentElement.querySelector('.payments-mode-hint');
+    if (hint) hint.style.display = (sel.value === 'installment') ? '' : 'none';
+}
+
+// 本地日期 YYYY-MM-DD（toISO 日期会踩 UTC 时区差一天）
+function _paymentsToday() {
+    var d = new Date();
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+
+// 新增行日期默认今天（卡片整页加载与局部刷新后均初始化）
+function _paymentsInitAddDate() {
+    var inp = document.querySelector('.payments-add-date');
+    if (inp && !inp.value) inp.value = _paymentsToday();
+}
+_paymentsInitAddDate();
+
+// 详情页收款卡片局部刷新（panel 路由与整页同源 partial）
+function refreshPaymentsCard(orderId) {
+    var card = document.getElementById('order-payments-card');
+    if (!card) return;
+    fetch('/orders/' + orderId + '/payments/panel')
+        .then(function(r) { return r.ok ? r.text() : null; })
+        .then(function(html) {
+            if (!html) return;
+            var fresh = new DOMParser().parseFromString(html, 'text/html').getElementById('order-payments-card');
+            if (fresh) {
+                card.replaceWith(fresh);
+                _paymentsInitAddDate();
+                if (window.lucide) lucide.createIcons();
+            }
+        });
+}
+
+// 收款写操作统一提交（POST/PUT/DELETE；成功 toast + 卡片刷新 + 统计卡同步，失败 toast 错误）
+function _paymentsSubmit(orderId, method, url, payload) {
+    var opts = { method: method, headers: { 'Content-Type': 'application/json' } };
+    if (payload !== undefined) opts.body = JSON.stringify(payload);
+    return dirtyFetch(url, opts)
+        .then(function(res) {
+            return res.json().then(function(d) { return { ok: res.ok, d: d || {} }; });
+        })
+        .then(function(r) {
+            if (r.ok && r.d.success) {
+                showToast(r.d.message || '已保存', 'success');
+                // 整内容区刷新（含收款卡片与财务区「收款」状态——浏览器实测观察③：
+                // 收齐自动结算需立即可见；事件委托在 document，innerHTML 替换后无需重绑）
+                if (typeof reloadDetailContent === 'function') reloadDetailContent();
+                else refreshPaymentsCard(orderId);
+                if (typeof refreshStatsPreservingRange === 'function') refreshStatsPreservingRange();
+            } else {
+                var err = r.d.error || (r.d.errors && r.d.errors[0] && r.d.errors[0].msg);
+                showToast(err || '保存失败', 'error');
+            }
+        })
+        .catch(function() { showToast('网络错误，请重试', 'error'); });
+}
+
+// 从输入行读单笔数据（dateEl/amountEl/noteEl）→ {paid_at, amount, note} 或 null（前端轻校验，服务端 PaymentRecord 兕底）
+function _paymentsReadInputs(dateEl, amountEl, noteEl) {
+    var paid_at = (dateEl.value || '').trim();
+    var amount = parseFloat(amountEl.value);
+    if (!paid_at) { showToast('请填写到账日期', 'error'); dateEl.focus(); return null; }
+    if (isNaN(amount) || amount < 0) { showToast('金额需为非负数字', 'error'); amountEl.focus(); return null; }
+    var payload = { paid_at: paid_at, amount: amount };
+    var note = (noteEl.value || '').trim();
+    if (note) payload.note = note;
+    return payload;
+}
+
+// 行转编辑态：日期/金额/备注输入框 + 保存/取消（value 赋值不走 HTML 解析，无注入面）
+function _paymentsRowToEdit(row) {
+    var date = row.querySelector('.payment-date').textContent.trim();
+    var amountText = row.querySelector('.payment-amount').textContent.trim().replace(/[^0-9.\-]/g, '');
+    var noteEl = row.querySelector('.payment-note');
+    var note = (noteEl.textContent === '—') ? '' : noteEl.textContent.trim();
+    var edit = document.createElement('div');
+    edit.className = 'payment-row payment-row-editing';
+    edit.setAttribute('data-payment-id', row.getAttribute('data-payment-id'));
+    edit.innerHTML = '<input type="date" class="payments-edit-date" aria-label="到账日期">'
+        + '<input type="number" class="payments-edit-amount" step="0.01" min="0" aria-label="金额">'
+        + '<input type="text" class="payments-edit-note" maxlength="500" placeholder="备注（可选）">'
+        + '<span class="payment-actions">'
+        + '<button type="button" class="btn-link btn-payments-save">保存</button>'
+        + '<button type="button" class="btn-link btn-payments-cancel">取消</button>'
+        + '</span>';
+    row.replaceWith(edit);
+    edit.querySelector('.payments-edit-date').value = date;
+    edit.querySelector('.payments-edit-amount').value = amountText;
+    edit.querySelector('.payments-edit-note').value = note;
+    edit.querySelector('.payments-edit-date').focus();
+}
+
+// 事件委托：记一笔 / 行编辑 / 行保存 / 行取消 / 行删除
+document.addEventListener('click', function(e) {
+    var card = e.target.closest('#order-payments-card');
+    if (!card) return;
+    var orderId = parseInt(card.getAttribute('data-order-id'), 10);
+
+    if (e.target.closest('.btn-payments-add')) {
+        var payload = _paymentsReadInputs(
+            card.querySelector('.payments-add-date'),
+            card.querySelector('.payments-add-amount'),
+            card.querySelector('.payments-add-note'));
+        if (payload) _paymentsSubmit(orderId, 'POST', '/orders/' + orderId + '/payments', payload);
+        return;
+    }
+    if (e.target.closest('.btn-payments-edit')) {
+        var row = e.target.closest('.payment-row');
+        if (row) _paymentsRowToEdit(row);
+        return;
+    }
+    if (e.target.closest('.btn-payments-save')) {
+        var erow = e.target.closest('.payment-row');
+        var pid = erow && parseInt(erow.getAttribute('data-payment-id'), 10);
+        var epayload = _paymentsReadInputs(
+            erow.querySelector('.payments-edit-date'),
+            erow.querySelector('.payments-edit-amount'),
+            erow.querySelector('.payments-edit-note'));
+        if (pid && epayload) _paymentsSubmit(orderId, 'PUT', '/orders/' + orderId + '/payments/' + pid, epayload);
+        return;
+    }
+    if (e.target.closest('.btn-payments-cancel')) {
+        refreshPaymentsCard(orderId);  // 重新拉 panel 还原该行
+        return;
+    }
+    if (e.target.closest('.btn-payments-del')) {
+        var drow = e.target.closest('.payment-row');
+        var did = drow && parseInt(drow.getAttribute('data-payment-id'), 10);
+        if (did && confirm('删除这条收款记录？（只进不退：删除后状态不会自动回退）')) {
+            _paymentsSubmit(orderId, 'DELETE', '/orders/' + orderId + '/payments/' + did);
+        }
+        return;
+    }
+});

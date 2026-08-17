@@ -1,11 +1,6 @@
 {% extends "base.html" %}
 {% block title %}看板视图 — oimimo scheduler{% endblock %}
 
-{% block head_extra %}
-    <!-- SortableJS（仅看板拖拽；app.js 的 initKanban 在此页调用 Sortable.create） -->
-    <script src="{{ url_for('static', filename='vendor/sortable.min.js') }}"></script>
-{% endblock %}
-
 {% block content %}
 <div class="page-header">
     <div>
@@ -118,10 +113,11 @@ function quickStageSwitch(orderId, newStage) {
     });
 }
 
-document.addEventListener('DOMContentLoaded', function() {
+// 卡 156：DOMContentLoaded → __pageInit，两路径由 app.js runPageInit 统一触发
+window.__pageInit = function() {
     initKanban();
     initKanbanFilter();
-});
+};
 
 // ── P18-F5 看板内容筛选（纯客户端显隐 + localStorage 持久） ──
 var KANBAN_FILTER_KEY = 'kanban_filters';
@@ -204,8 +200,8 @@ function initKanbanFilter() {
     // 绑定控件变化
     document.querySelectorAll('.kanban-filter-stage, .kanban-filter-type, #kanban-filter-overdue')
         .forEach(function(el) { el.addEventListener('change', onKanbanFilterChange); });
-    // 点击面板外区域收起
-    document.addEventListener('click', function(e) {
+    // 点击面板外区域收起（onceBind：boosted 导航重执行本脚本时防重复挂载）
+    onceBind(document, 'click', 'kanban-filter-outside', function(e) {
         var wrap = document.getElementById('kanban-filter');
         var panel = document.getElementById('kanban-filter-panel');
         if (wrap && panel && !panel.classList.contains('hidden') && !wrap.contains(e.target)) {
@@ -214,7 +210,7 @@ function initKanbanFilter() {
         }
     });
     // Escape 收起面板
-    document.addEventListener('keydown', function(e) {
+    onceBind(document, 'keydown', 'kanban-filter-esc', function(e) {
         if (e.key !== 'Escape') return;
         var panel = document.getElementById('kanban-filter-panel');
         if (panel && !panel.classList.contains('hidden')) {

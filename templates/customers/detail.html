@@ -6,7 +6,7 @@
 {% block content %}
 <div class="page-header">
     <div>
-        <h1 class="page-title">{{ customer.name }}</h1>
+        <h1 class="page-title">{{ customer.name }}{% if customer.is_vip %} <span class="stage-badge finish" style="vertical-align:middle;">VIP</span>{% endif %}</h1>
         <p class="page-subtitle">
             累计消费 ¥{{ "%.2f"|format(customer.total_spent) }} · {{ customer.purchase_count }} 次购买<span style="color:var(--color-text-tertiary);font-size:0.75rem;">（口径：仅统计已归档+已完成+已结算订单的实收金额）</span>
         </p>
@@ -45,6 +45,21 @@
                 <div class="detail-label">偏好</div>
                 <div class="detail-value">{{ customer.preferences or '-' }}</div>
             </div>
+            {% if customer.discount_pct is not none %}
+            {# Spec19：无折扣（NULL）不显示折扣行（§3.4） #}
+            <div class="detail-item">
+                <div class="detail-label">默认折扣</div>
+                <div class="detail-value">{{ '%g'|format(customer.discount_pct) }}%（{{ '%g'|format(customer.discount_pct / 10) }} 折）</div>
+                <div style="font-size:0.72rem;color:var(--color-text-tertiary);margin-top:2px;">新建订单时自动带出，可在订单内单独调整</div>
+            </div>
+            {% endif %}
+            {% if customer.former_names %}
+            <div class="detail-item">
+                <div class="detail-label">曾用名</div>
+                <div class="detail-value" style="color:var(--color-text-secondary);">{{ customer.former_names }}</div>
+                <div style="font-size:0.72rem;color:var(--color-text-tertiary);margin-top:2px;">按平台 ID 匹配时自动记录的名字变更</div>
+            </div>
+            {% endif %}
             <div class="detail-item">
                 <div class="detail-label">备注</div>
                 <div class="detail-value">{{ customer.notes or '-' }}</div>
@@ -208,8 +223,10 @@
         idx = (idx + 1) % items.length;
         showImage();
     };
-    document.addEventListener('keydown', function(e) {
-        if (!lb || lb.style.display === 'none') return;
+    // onceBind：boosted 导航重执行本脚本时防重复挂载；lb 动态解析，跨导航有效
+    onceBind(document, 'keydown', 'customer-detail-lightbox-keys', function(e) {
+        var lbEl = document.getElementById('customer-lightbox');
+        if (!lbEl || lbEl.style.display === 'none') return;
         if (e.key === 'Escape') window.closeCustomerLightbox();
         else if (e.key === 'ArrowLeft') window.customerLightboxPrev();
         else if (e.key === 'ArrowRight') window.customerLightboxNext();

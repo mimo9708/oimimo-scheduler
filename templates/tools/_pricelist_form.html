@@ -1,0 +1,76 @@
+{# 价目项目表单模态片段（新建/编辑复用；校验失败 400 时带 error_text 重渲染） #}
+{% set is_new = not (item and item.id) %}
+{% set action_url = ('/tools/pricelist/' if is_new else ('/tools/pricelist/%d/update' % item.id)) %}
+<form class="tool-htmx-form pl-form" hx-post="{{ action_url }}" hx-target="#center-modal-body" hx-swap="innerHTML">
+    {% if error_text %}
+    <div class="pl-form-error">{{ error_text|e }}</div>
+    {% endif %}
+    <div class="pl-form-row">
+        <label class="pl-form-label">分类</label>
+        <input type="text" name="category" class="pl-form-input" list="pl-cat-list" maxlength="50"
+               value="{{ (item.category if item else '')|e }}" placeholder="默认（可输入新分类名）">
+        <datalist id="pl-cat-list">
+            {% for c in categories %}<option value="{{ c|e }}"></option>{% endfor %}
+        </datalist>
+    </div>
+    <div class="pl-form-row">
+        <label class="pl-form-label">名称</label>
+        <input type="text" name="name" class="pl-form-input" maxlength="100"
+               value="{{ (item.name if item else '')|e }}" placeholder="例如：Q版头像 / 半身立绘">
+    </div>
+    <div class="pl-form-split">
+        <div class="pl-form-row" style="flex:1;">
+            <label class="pl-form-label">价格（元）</label>
+            <input type="number" name="price" class="pl-form-input" min="0" step="0.01"
+                   value="{{ item.price if item else '' }}" placeholder="0 表示面议">
+        </div>
+        <div class="pl-form-row" style="flex:1;">
+            <label class="pl-form-label">价格上限（可选）</label>
+            <input type="number" name="price_max" class="pl-form-input" min="0" step="0.01"
+                   value="{{ item.price_max if (item and item.price_max is not none) else '' }}"
+                   placeholder="留空为一口价">
+        </div>
+        <div class="pl-form-row" style="flex:1;">
+            <label class="pl-form-label">单位</label>
+            <input type="text" name="unit" class="pl-form-input" maxlength="20"
+                   value="{{ (item.unit if item else '')|e }}" placeholder="例如：/张 /套">
+        </div>
+    </div>
+    <div class="pl-form-row">
+        <label class="pl-form-label">说明</label>
+        <textarea name="description" class="pl-form-textarea" rows="3" maxlength="500"
+                  placeholder="可选：包含内容、工期、修改次数等">{{ (item.description if item else '')|e }}</textarea>
+    </div>
+    <div class="pl-form-actions">
+        <button type="button" class="btn btn-ghost" onclick="closeCenterModal()">取消</button>
+        <button type="submit" class="btn btn-primary">{{ '创建' if is_new else '保存' }}</button>
+    </div>
+</form>
+<style>
+    .pl-form { display: flex; flex-direction: column; gap: var(--space-md); }
+    .pl-form-error {
+        padding: 8px 12px;
+        border-radius: var(--radius-sm);
+        background: color-mix(in srgb, var(--color-danger) 10%, transparent);
+        color: var(--color-danger);
+        font-size: 0.8rem;
+    }
+    .pl-form-row { display: flex; flex-direction: column; gap: 5px; }
+    .pl-form-split { display: flex; gap: var(--space-md); }
+    .pl-form-label { font-size: 0.8rem; font-weight: 600; color: var(--color-text-secondary); }
+    .pl-form-input, .pl-form-textarea {
+        padding: 8px 12px;
+        border: 1px solid var(--color-border);
+        border-radius: var(--radius-md);
+        background: var(--color-bg);
+        color: var(--color-text);
+        font-size: 0.86rem;
+        font-family: inherit;
+    }
+    .pl-form-input:focus, .pl-form-textarea:focus {
+        outline: none;
+        border-color: var(--color-border-strong);
+    }
+    .pl-form-textarea { resize: vertical; line-height: 1.6; }
+    .pl-form-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: var(--space-xs); }
+</style>

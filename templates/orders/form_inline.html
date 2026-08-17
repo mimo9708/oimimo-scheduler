@@ -140,7 +140,26 @@
             </div>
         </div>
 
+        {# Spec 26：收款模式开关（默认整单；编辑已有分期单时初始选中分期） #}
+        <div class="form-group">
+            <label>收款方式</label>
+            <select name="payment_mode" onchange="togglePaymentsModeHint(this)">
+                <option value="simple" {% if (order.payment_mode or 'simple') == 'simple' %}selected{% endif %}>整单 · 按排单月计</option>
+                <option value="installment" {% if order.payment_mode == 'installment' %}selected{% endif %}>分期 · 按到账月计</option>
+            </select>
+            <div class="payments-mode-hint" style="display:none;">
+                分期：按每笔到账记收入，到账记录在订单详情页「收款流水」卡片管理；已有到账记录时不可切回整单。
+            </div>
+        </div>
+
         <!-- 财务 -->
+        {# Spec19：订单级折扣（公共字段，平台/直接两模式均生效；留空 = 不打折） #}
+        <div class="form-group">
+            <label>折扣 (%)</label>
+            <input type="number" name="discount_pct" step="0.1" min="1" max="100"
+                   value="{{ order.discount_pct if order.discount_pct is not none else '' }}"
+                   placeholder="留空 = 不打折" oninput="calcInlineActual()" id="inline-discount-pct">
+        </div>
         {% set is_plat = order.source in PLATFORM_SOURCES %}
         <div id="inline-finance-platform" style="{{ 'display:none;' if not is_plat else '' }}">
             <div class="form-row">
@@ -151,11 +170,12 @@
                 <div class="form-group">
                     <label>手续费 (%)</label>
                     <input type="number" name="platform_fee_pct" step="0.1" min="0" max="100"
-                           value="{{ '%.1f'|format(order.platform_fee_pct if order.platform_fee_pct else DEFAULT_FEES.get(order.source, 5)) }}" oninput="calcInlineActual()" id="inline-pct" {{ 'disabled' if not is_plat }}>
+                           value="{{ '%.1f'|format(order.platform_fee_pct if order.platform_fee_pct is not none else DEFAULT_FEES.get(order.source, 5)) }}" oninput="calcInlineActual()" id="inline-pct" {{ 'disabled' if not is_plat }}>
                 </div>
             </div>
             <div style="margin-top:var(--space-sm);padding:10px;background:var(--color-bg);border-radius:var(--radius-sm);font-size:0.85rem;display:flex;gap:var(--space-lg);">
                 <span>收入: <strong id="inline-income">¥0</strong></span>
+                <span>折后: <strong style="color:var(--color-info);">¥<span id="inline-discounted">0</span></strong></span>
                 <span>手续费: <strong style="color:var(--color-danger);">-¥<span id="inline-fee">0</span></strong></span>
                 <span>实收: <strong style="color:var(--color-success);">¥<span id="inline-actual">0</span></strong></span>
             </div>
@@ -173,6 +193,7 @@
             </div>
             <div style="margin-top:var(--space-sm);padding:10px;background:var(--color-bg);border-radius:var(--radius-sm);font-size:0.85rem;display:flex;gap:var(--space-lg);">
                 <span>定金+尾款: <strong id="inline-total">¥0</strong></span>
+                <span>折后: <strong style="color:var(--color-info);">¥<span id="inline-discounted2">0</span></strong></span>
                 <span>实收: <strong style="color:var(--color-success);">¥<span id="inline-actual2">0</span></strong></span>
             </div>
         </div>
@@ -227,13 +248,23 @@
     </form>
 </div>
 
-<script src="/static/datetime-toggle.js"></script>
 <script>
 // 初始化双模式时间选择器（setTimeout 确保 HTMX 注入后 DOM 就绪）
 setTimeout(function() { DateTimeToggle.initAll('#drawer-body .date-field input[type="date"], #drawer-body .date-field input[type="datetime-local"]'); }, 0);
 
 var INLINE_PLATFORM = {{ PLATFORM_SOURCES|list|tojson }};
 var INLINE_FEES = {{ DEFAULT_FEES|tojson }};
+// Spec19：客户默认折扣映射（id → discount_pct，null = 无折扣），select change 时带出
+var INLINE_CUSTOMER_DISCOUNTS = { {% for c in customers %}{{ c.id }}: {{ c.discount_pct if c.discount_pct is not none else 'null' }}{{ ',' if not loop.last }}{% endfor %} };
+(function() {
+    var sel = document.querySelector('#customer-select-wrapper-inline select');
+    if (!sel) return;
+    sel.addEventListener('change', function() {
+        var v = this.value && INLINE_CUSTOMER_DISCOUNTS[this.value];
+        document.getElementById('inline-discount-pct').value = (v !== undefined && v !== null) ? v : '';
+        calcInlineActual();
+    });
+})();
 // #43：初始 lastSource = 当前来源，打开抽屉不覆盖快照；只有真正切换来源才填入设置的默认费率
 var inlineLastSource = document.querySelector('[name=\"source\"]').value||'';
 function isInlinePlat() { var s = document.querySelector('[name=\"source\"]').value||''; return INLINE_PLATFORM.indexOf(s)!==-1; }
@@ -245,12 +276,20 @@ function toggleInlineFinance() { var p=isInlinePlat(); document.getElementById('
     if(s!==inlineLastSource){ if(p && INLINE_FEES[s]!==undefined) document.getElementById('inline-pct').value=INLINE_FEES[s].toFixed(1); inlineLastSource=s; }
     calcInlineActual(); }
 function calcInlineActual() {
-    if(isInlinePlat()){ var income=parseFloat(document.getElementById('inline-deposit-plat').value)||0; var pct=parseFloat(document.getElementById('inline-pct').value)||0; var fee=Math.round(income*pct)/100; document.getElementById('inline-income').textContent='¥'+income.toFixed(2); document.getElementById('inline-fee').textContent=fee.toFixed(2); document.getElementById('inline-actual').textContent=(income-fee).toFixed(2); }
-    else{ var d=parseFloat(document.getElementById('inline-deposit-direct').value)||0; var b=parseFloat(document.getElementById('inline-balance-direct').value)||0; document.getElementById('inline-total').textContent='¥'+(d+b).toFixed(2); document.getElementById('inline-actual2').textContent=(d+b).toFixed(2); }
+    // Spec19 D4 先折后费：折后 = round(原价×折扣/100, 2) → 费按折后 → 实收 = 折后 − 费（直接来源实收 = 折后）
+    var disc=parseFloat(document.getElementById('inline-discount-pct').value);
+    if(isInlinePlat()){ var income=parseFloat(document.getElementById('inline-deposit-plat').value)||0; var discounted=(disc>0&&disc<=100)?Math.round(income*disc)/100:income; var pct=parseFloat(document.getElementById('inline-pct').value)||0; var fee=Math.round(discounted*pct)/100; document.getElementById('inline-income').textContent='¥'+income.toFixed(2); document.getElementById('inline-discounted').textContent=discounted.toFixed(2); document.getElementById('inline-fee').textContent=fee.toFixed(2); document.getElementById('inline-actual').textContent=(discounted-fee).toFixed(2); }
+    else{ var d=parseFloat(document.getElementById('inline-deposit-direct').value)||0; var b=parseFloat(document.getElementById('inline-balance-direct').value)||0; var total=d+b; var discounted2=(disc>0&&disc<=100)?Math.round(total*disc)/100:total; document.getElementById('inline-total').textContent='¥'+total.toFixed(2); document.getElementById('inline-discounted2').textContent=discounted2.toFixed(2); document.getElementById('inline-actual2').textContent=discounted2.toFixed(2); }
 }
 document.querySelector('[name=\"source\"]').addEventListener('input',toggleInlineFinance);
 document.querySelector('[name=\"source\"]').addEventListener('change',toggleInlineFinance);
-calcInlineActual();
+// Spec19：延迟初始计算——片段经 HTMX 注入后函数才就绪（立即调用会命中旧页面旧函数）
+setTimeout(calcInlineActual, 0);
+// Spec 26：编辑已有分期单时初始化模式提示条显示态
+setTimeout(function() {
+    var pmSel = document.querySelector('#inline-form select[name="payment_mode"]');
+    if (pmSel && typeof togglePaymentsModeHint === 'function') togglePaymentsModeHint(pmSel);
+}, 0);
 
 // Spec12：流程预设切换 → 更新 stage_flow 隐藏字段 + 阶段 select
 var _INLINE_FLOWS = {{ STAGE_FLOWS | tojson }};
@@ -321,8 +360,9 @@ function initInlineColorPicker() {
     });
 }
 setTimeout(initInlineColorPicker, 200);
+// 卡 156：历史恢复的 afterSwap 无 target，须守卫
 document.addEventListener('htmx:afterSwap', function(evt) {
-    if (evt.detail.target.id === 'drawer-body') {
+    if (evt.detail && evt.detail.target && evt.detail.target.id === 'drawer-body') {
         setTimeout(initInlineColorPicker, 200);
     }
 });

@@ -1,0 +1,60 @@
+{# 分组管理模态片段（任务卡 91 T22.13）：重命名 input+保存 / 删除（带确认）；
+   操作成功 → 服务端 HX-Retarget 重渲染 #rt-app 整区并关闭模态 #}
+{% if groups %}
+<div class="rt-groups-manage">
+    {% for g in groups %}
+    <div class="rt-group-row">
+        <form class="tool-htmx-form rt-rename-form" hx-post="/tools/reply-templates/group/rename"
+              hx-target="#center-modal-body" hx-swap="innerHTML">
+            <input type="hidden" name="old_name" value="{{ g.name|e }}">
+            <input type="text" name="new_name" class="rt-rename-input" maxlength="50" value="{{ g.name|e }}">
+            <span class="rt-group-row-count">{{ g.count }} 条</span>
+            <button type="submit" class="btn btn-ghost btn-sm">重命名</button>
+        </form>
+        {% if g.name != '未分组' %}
+        <form class="tool-htmx-form" hx-post="/tools/reply-templates/group/delete"
+              hx-target="#center-modal-body" hx-swap="innerHTML"
+              onsubmit="return confirm('删除分组「{{ g.name|e }}」？组内模板将归入「未分组」。');">
+            <input type="hidden" name="group_name" value="{{ g.name|e }}">
+            <button type="submit" class="btn btn-ghost btn-sm" style="color:var(--color-danger);">删除分组</button>
+        </form>
+        {% endif %}
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<div class="empty-state" style="padding:32px 16px;">
+    <div class="empty-state-text">还没有分组</div>
+    <div style="font-size:0.8rem;color:var(--color-text-tertiary);margin-top:4px;">新建/编辑模板时输入组名即可创建分组。</div>
+</div>
+{% endif %}
+<style>
+    .rt-groups-manage { display: flex; flex-direction: column; gap: var(--space-sm); }
+    .rt-group-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+    }
+    .rt-rename-form {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex: 1;
+        min-width: 260px;
+    }
+    .rt-rename-input {
+        flex: 1;
+        padding: 6px 10px;
+        border: 1px solid var(--color-border);
+        border-radius: var(--radius-sm);
+        background: var(--color-bg);
+        color: var(--color-text);
+        font-size: 0.84rem;
+    }
+    .rt-group-row-count {
+        font-size: 0.75rem;
+        color: var(--color-text-tertiary);
+        flex-shrink: 0;
+    }
+</style>

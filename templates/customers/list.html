@@ -79,6 +79,7 @@
                                 {{ c.name }}
                             </a>
                         </strong>
+                        {% if c.is_vip %}<span class="stage-badge finish" style="font-size:0.7rem;margin-left:4px;">VIP</span>{% endif %}
                     </td>
                     <td>
                         {% if c.platform_url %}

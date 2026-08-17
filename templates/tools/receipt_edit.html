@@ -1,0 +1,390 @@
+{# 小票打印机编辑模式（Spec 23 卡 96 T23.12-14 + 2026-08-13 三列改版）
+   三列：左=信息/样式类（店铺/主图/样式/模板）｜中=sticky 实时预览｜右=计算类（制品/计算）。
+   草稿整体保存（D4）；编辑控件只在本页（用户硬要求）。
+   渲染唯一源仍为 receipt.js rcRender；编辑器状态 = 客户端 draft 对象。 #}
+{% extends "tools/_shell.html" %}
+
+{% block tool_actions %}
+<button type="button" class="btn btn-primary" id="rc-save-btn" onclick="rc_saveDraft(this)">保存草稿</button>
+<a href="/tools/receipt/" class="btn btn-ghost">完成，查看预览 →</a>
+{% endblock %}
+
+{% block tool_content %}
+<div class="rc-edit-banner">
+    <i data-lucide="pencil-line"></i>
+    <span>编辑模式：左右两侧改内容，中间即时预览；「保存草稿」后才写入，离开前记得保存。</span>
+</div>
+<div class="rc-edit-grid">
+    <div class="rc-editor-col" id="rc-editor-left">
+
+        {# ── 分区 1：店铺信息 ── #}
+        <section class="rc-card">
+            <h3 class="rc-card-title">店铺信息</h3>
+            <div class="rc-field"><label>店名</label><input id="rc-f-shop" class="form-input" maxlength="50" placeholder="小票顶部大字"></div>
+            <div class="rc-field"><label>副标题</label><input id="rc-f-sub" class="form-input" maxlength="50" placeholder="COMMISSION · RECEIPT"></div>
+            <div class="rc-field-row">
+                <div class="rc-field"><label>单号</label><input id="rc-f-no" class="form-input" maxlength="50"></div>
+                <div class="rc-field"><label>日期</label><input id="rc-f-date" class="form-input" type="date"></div>
+            </div>
+            <div class="rc-field"><label>联系方式</label><input id="rc-f-contact" class="form-input" maxlength="50" placeholder="QQ / 微信 / 邮箱"></div>
+            <div class="rc-field"><label>footer 感谢语</label><input id="rc-f-footer" class="form-input" maxlength="100"></div>
+            <!-- data-order-snapshot: 订单快照拉取挂载点（Spec 23 预留，未实现） -->
+        </section>
+
+        {# ── 分区 2：主图 ── #}
+        <section class="rc-card">
+            <h3 class="rc-card-title">主图</h3>
+            {# 分段选择器（方案B）：保留 radio 语义，receipt.js 按 name 读取零改动；模式在上传时生效 #}
+            <div class="rc-seg" role="radiogroup" aria-label="主图模式">
+                <label class="rc-seg-item"><input type="radio" name="rc-imgmode" value="gray">灰度</label>
+                <label class="rc-seg-item"><input type="radio" name="rc-imgmode" value="dither" checked>抖动印刷</label>
+                <label class="rc-seg-item"><input type="radio" name="rc-imgmode" value="color">彩色</label>
+            </div>
+            <div class="rc-seg-hint">模式在「上传主图」时生效，不会重新处理已有主图</div>
+            <div class="rc-field-row" style="align-items:center;gap:8px;">
+                <button type="button" class="btn btn-ghost" id="rc-img-upload-btn"><i data-lucide="image-plus"></i> 上传主图</button>
+                <button type="button" class="btn btn-ghost" id="rc-img-del" hidden>删除</button>
+            </div>
+            <img id="rc-img-thumb" class="rc-thumb" hidden alt="主图预览">
+            <input type="file" id="rc-img-file" accept=".png,.jpg,.jpeg,.gif,.webp,.bmp" hidden>
+        </section>
+
+        {# ── 分区 2b：footer 插图（2026-08-13 用户需求 3：总计与感谢语之间，同主图三模式管线）── #}
+        <section class="rc-card">
+            <h3 class="rc-card-title">footer 插图</h3>
+            <div class="rc-seg" role="radiogroup" aria-label="footer 插图模式">
+                <label class="rc-seg-item"><input type="radio" name="rc-fimgmode" value="gray">灰度</label>
+                <label class="rc-seg-item"><input type="radio" name="rc-fimgmode" value="dither">抖动印刷</label>
+                <label class="rc-seg-item"><input type="radio" name="rc-fimgmode" value="color" checked>彩色</label>
+            </div>
+            <div class="rc-seg-hint">显示在小票总计与感谢语之间；模式在「上传插图」时生效</div>
+            <div class="rc-field-row" style="align-items:center;gap:8px;">
+                <button type="button" class="btn btn-ghost" id="rc-fimg-upload-btn"><i data-lucide="image-plus"></i> 上传插图</button>
+                <button type="button" class="btn btn-ghost" id="rc-fimg-del" hidden>删除</button>
+            </div>
+            <img id="rc-fimg-thumb" class="rc-thumb" hidden alt="footer 插图预览">
+            <input type="file" id="rc-fimg-file" accept=".png,.jpg,.jpeg,.gif,.webp,.bmp" hidden>
+        </section>
+
+        {# ── 分区 5：样式 ── #}
+        <section class="rc-card">
+            <h3 class="rc-card-title">样式</h3>
+            <div class="rc-preset-row" id="rc-presets">
+                <button type="button" class="rc-preset-card" data-preset="list">简洁</button>
+                <button type="button" class="rc-preset-card" data-preset="retro">复古商店</button>
+                <button type="button" class="rc-preset-card" data-preset="hand">手写涂鸦</button>
+                <button type="button" class="rc-preset-card" data-preset="mono">极简黑白</button>
+            </div>
+            <div class="rc-field-row">
+                <div class="rc-field"><label>纸色</label><input id="rc-f-paper" type="color" value="#fdfcf8"></div>
+                <div class="rc-field"><label>墨色（字体颜色）</label><input id="rc-f-ink" type="color" value="#1a1a1a"></div>
+            </div>
+            <div class="rc-bg-box">
+                <label>背景</label>
+                <div class="rc-field-row" style="align-items:center;gap:8px;">
+                    <img id="rc-bg-img" class="rc-thumb rc-thumb-sm" alt="当前背景">
+                    <button type="button" class="btn btn-ghost" id="rc-bg-upload-btn"><i data-lucide="image-plus"></i> 上传背景</button>
+                    <button type="button" class="btn btn-ghost" id="rc-bg-reset">恢复默认</button>
+                </div>
+                <input type="file" id="rc-bg-file" accept=".png,.jpg,.jpeg,.gif,.webp,.bmp" hidden>
+            </div>
+            <div class="rc-field-row">
+                <label class="rc-check"><input type="checkbox" id="rc-f-barcode" checked> 条码</label>
+                <label class="rc-check"><input type="checkbox" id="rc-f-zigzag" checked> 锯齿边</label>
+            </div>
+        </section>
+
+        {# ── 分区 6：模板 ── #}
+        <section class="rc-card">
+            <h3 class="rc-card-title">样式模板</h3>
+            <div class="rc-field-row" style="align-items:center;gap:8px;">
+                <input id="rc-tpl-name" class="form-input" maxlength="50" placeholder="模板名称" style="flex:1;">
+                <button type="button" class="btn btn-ghost" id="rc-tpl-save">保存为模板</button>
+            </div>
+            <div id="rc-tpl-list"></div>
+        </section>
+    </div>
+
+    <div class="rc-preview-col">
+        <div class="rc-preview-sticky">
+            <div class="rc-preview-label"><i data-lucide="eye"></i> 实时预览</div>
+            <div id="rc-app"></div>
+        </div>
+    </div>
+
+    <div class="rc-editor-col" id="rc-editor-right">
+
+        {# ── 分区 3：制品列表 ── #}
+        <section class="rc-card">
+            <h3 class="rc-card-title">制品列表</h3>
+            <div id="rc-items"></div>
+            <button type="button" class="btn btn-ghost" id="rc-add-item" style="margin-top:8px;">＋ 添加制品</button>
+            <datalist id="rc-pl-datalist">
+                {% for p in pricelist %}<option value="{{ p.name|e }}" data-price="{{ p.price }}" data-pricemax="{{ p.price_max or '' }}"></option>{% endfor %}
+            </datalist>
+        </section>
+
+        {# ── 分区 3b：倍率快捷预设管理（2026-08-13 用户需求 2a：名称/倍率均可自定义，内联增删改）── #}
+        <section class="rc-card">
+            <h3 class="rc-card-title">倍率快捷预设</h3>
+            <div class="rc-seg-hint">制品行「倍率」快捷按钮由此配置（如「商用 ×2」「买断 ×3」）；改动自动保存，全局生效</div>
+            <div id="rc-mp-list"></div>
+            <button type="button" class="btn btn-ghost" id="rc-mp-add" style="margin-top:8px;">＋ 添加预设</button>
+        </section>
+
+        {# ── 分区 4：计算（方案B 2×2 排布）── #}
+        <section class="rc-card">
+            <h3 class="rc-card-title">计算（倍率 / 折扣 / 定金）</h3>
+            <div class="rc-field-row">
+                <div class="rc-field"><label>倍率（如商用 ×2）</label><input id="rc-f-mult" class="form-input" type="number" min="0.1" max="99" step="0.1" value="1"></div>
+                <div class="rc-field"><label>已收定金</label><input id="rc-f-dep" class="form-input" type="number" min="0" step="1" value="0"></div>
+            </div>
+            <div class="rc-field-row">
+                <div class="rc-field"><label>折扣形态</label>
+                    <select id="rc-f-disc-type" class="form-input">
+                        <option value="none" selected>无</option>
+                        <option value="amount">直减金额</option>
+                        <option value="rate">按折数</option>
+                    </select>
+                </div>
+                <div class="rc-field"><label>折扣值</label><input id="rc-f-disc" class="form-input" type="number" min="0" step="0.1" value="0" disabled placeholder="金额"></div>
+            </div>
+            {# 2026-08-13 用户需求 2b：整单倍率行文案自定义（小票「合计」下方的倍率行）#}
+            <div class="rc-field-row">
+                <div class="rc-field"><label>倍率行标签</label><input id="rc-f-multlabel" class="form-input" maxlength="20" value="倍率" placeholder="如 商用授权"></div>
+                <div class="rc-field"><label>倍率行表述（{n}=数值）</label><input id="rc-f-multexpr" class="form-input" maxlength="30" value="×{n}" placeholder="如 整体乘{n｜留空不显示"></div>
+            </div>
+            <div class="rc-seg-hint">小票显示为「标签 表述（全部制品）」，如「倍率 ×2（全部制品）」；表述留空只显示标签</div>
+        </section>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+{{ super() }}
+<script src="{{ url_for('static', filename='receipt.js') }}?v={{ APP_VERSION }}"></script>
+<script>
+    // D13：价目表只读注入 datalist 联动；模板列表供应用/删除
+    window.RC_DRAFT = {{ draft|tojson }};
+    window.RC_PRICELIST = {{ pricelist|tojson }};
+    window.RC_TEMPLATES = {{ templates|tojson }};
+    // 2026-08-13 用户需求 2a：单品倍率快捷预设（全局配置，编辑页内联增删改，防抖落库 settings）
+    window.RC_MULT_PRESETS = {{ mult_presets|tojson }};
+    rcEditorInit();
+</script>
+<style>
+    .tool-receipt .rc-edit-banner {
+        display: flex; align-items: center; gap: 8px;
+        padding: 9px 14px; margin-bottom: var(--space-md);
+        background: var(--color-surface); border: 1px solid var(--color-border);
+        border-radius: var(--radius-md); font-size: 0.78rem; color: var(--color-text-secondary);
+    }
+    .tool-receipt .rc-edit-banner svg { width: 14px; height: 14px; flex-shrink: 0; color: var(--color-text-tertiary); }
+    .tool-receipt .rc-edit-grid {
+        display: grid; grid-template-columns: 300px minmax(0, 1fr) 430px;
+        gap: var(--space-lg); align-items: start;
+    }
+    @media (max-width: 1500px) { .tool-receipt .rc-edit-grid { grid-template-columns: 280px minmax(0, 1fr) 380px; } }
+    @media (max-width: 1150px) { .tool-receipt .rc-edit-grid { grid-template-columns: 1fr; } }
+    .tool-receipt .rc-editor-col { display: flex; flex-direction: column; gap: var(--space-md); min-width: 0; }
+    .tool-receipt .rc-preview-sticky { position: sticky; top: var(--space-md); }
+    .tool-receipt .rc-preview-label {
+        display: flex; align-items: center; gap: 6px;
+        font-size: 0.75rem; font-weight: 700; color: var(--color-text-tertiary);
+        margin-bottom: var(--space-sm); letter-spacing: 0.08em;
+    }
+    .tool-receipt .rc-preview-label svg { width: 14px; height: 14px; }
+    .tool-receipt .rc-card {
+        background: var(--color-surface); border: 1px solid var(--color-border);
+        border-radius: var(--radius-md); padding: var(--space-md);
+    }
+    .tool-receipt .rc-card-title {
+        margin: 0 0 var(--space-sm); font-size: 0.82rem; font-weight: 700;
+        color: var(--color-text-secondary); display: flex; align-items: center; gap: 6px;
+    }
+    .tool-receipt .rc-card-title::after { content: ''; flex: 1; height: 1px; background: var(--color-border); }
+    .tool-receipt .rc-field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; min-width: 0; }
+    .tool-receipt .rc-field label { font-size: 0.72rem; color: var(--color-text-secondary); font-weight: 600; }
+    .tool-receipt .rc-field-row { display: flex; gap: 8px; flex-wrap: wrap; }
+    .tool-receipt .rc-field-row .rc-field { flex: 1; }
+    .tool-receipt .rc-check {
+        display: inline-flex; align-items: center; gap: 5px;
+        font-size: 0.8rem; color: var(--color-text-secondary); cursor: pointer;
+    }
+    .tool-receipt .rc-thumb {
+        max-width: 140px; max-height: 90px; border-radius: var(--radius-sm);
+        border: 1px solid var(--color-border); margin-top: 8px; display: block; object-fit: cover;
+    }
+    /* hidden 属性优先于 display:block（实测缩略图 hidden 被覆盖不隐藏） */
+    .tool-receipt [hidden] { display: none !important; }
+    .tool-receipt .rc-thumb-sm { max-width: 72px; max-height: 52px; margin-top: 0; }
+    /* 制品行 */
+    .tool-receipt .rc-item-row {
+        border: 1px solid var(--color-border); border-radius: var(--radius-sm);
+        padding: 8px; margin-bottom: 8px; background: var(--color-bg);
+    }
+    .tool-receipt .rc-item-row.rc-dragging { opacity: 0.5; }
+    .tool-receipt .rc-item-main {
+        display: grid; grid-template-columns: auto minmax(0, 1fr) 84px 62px auto auto;
+        gap: 6px; align-items: center;
+    }
+    .tool-receipt .rc-drag { cursor: grab; color: var(--color-text-tertiary); display: inline-flex; padding: 2px; }
+    .tool-receipt .rc-drag svg { width: 14px; height: 14px; }
+    .tool-receipt .rc-item-main input[type="number"] { padding: 5px 6px; }
+    .tool-receipt .rc-i-del, .tool-receipt .rc-x-del {
+        border: none; background: transparent; cursor: pointer;
+        color: var(--color-text-tertiary); display: inline-flex; padding: 3px; border-radius: var(--radius-sm);
+    }
+    .tool-receipt .rc-i-del:hover, .tool-receipt .rc-x-del:hover { color: var(--color-danger); background: var(--color-surface); }
+    .tool-receipt .rc-i-del svg, .tool-receipt .rc-x-del svg { width: 14px; height: 14px; }
+    .tool-receipt .rc-extra-edit {
+        display: grid; grid-template-columns: 14px minmax(0, 1fr) 84px 62px auto;
+        gap: 6px; align-items: center; margin: 6px 0 0 20px;
+    }
+    .tool-receipt .rc-extra-edit::before { content: '•'; color: var(--color-text-tertiary); text-align: center; }
+    .tool-receipt .rc-add-extra {
+        margin: 6px 0 0 20px; border: none; background: transparent; cursor: pointer;
+        color: var(--color-text-tertiary); font-size: 0.74rem; padding: 2px 4px;
+    }
+    .tool-receipt .rc-add-extra:hover { color: var(--color-text); }
+    /* 预设卡（方案B：与分段选择器同一语言——灰底容器 + 选中浮白）*/
+    .tool-receipt .rc-preset-row {
+        display: grid; grid-template-columns: repeat(4, 1fr); gap: 2px;
+        background: var(--color-sidebar); border-radius: var(--radius-md); padding: 3px; margin-bottom: 10px;
+    }
+    .tool-receipt .rc-preset-card {
+        padding: 6px 2px; border: 1px solid transparent; border-radius: 5px;
+        background: transparent; color: var(--color-text-tertiary);
+        font-size: 0.74rem; cursor: pointer; white-space: nowrap;
+        transition: background .15s, color .15s, box-shadow .15s;
+    }
+    .tool-receipt .rc-preset-card:hover { color: var(--color-text-secondary); }
+    .tool-receipt .rc-preset-card.active {
+        background: var(--color-surface); color: var(--color-text); font-weight: 700;
+        box-shadow: var(--shadow-xs);
+    }
+    .tool-receipt .rc-bg-box { margin: 8px 0; }
+    .tool-receipt .rc-bg-box > label { font-size: 0.72rem; color: var(--color-text-tertiary); font-weight: 600; display: block; margin-bottom: 4px; }
+    /* 模板列表 */
+    .tool-receipt .rc-tpl-row {
+        display: flex; align-items: center; gap: 6px;
+        padding: 6px 4px; border-bottom: 1px dashed var(--color-border); font-size: 0.8rem;
+    }
+    .tool-receipt .rc-tpl-row:last-child { border-bottom: none; }
+    .tool-receipt .rc-tpl-name { flex: 1; min-width: 0; word-break: break-all; color: var(--color-text); }
+    .tool-receipt .rc-tpl-empty { font-size: 0.76rem; color: var(--color-text-tertiary); padding: 6px 0; }
+    .tool-receipt .rc-tpl-apply, .tool-receipt .rc-tpl-del {
+        border: none; background: transparent; cursor: pointer; font-size: 0.74rem;
+        color: var(--color-text-tertiary); padding: 2px 6px; border-radius: var(--radius-sm);
+    }
+    .tool-receipt .rc-tpl-apply:hover { color: var(--color-text); background: var(--color-surface); }
+    .tool-receipt .rc-tpl-del:hover { color: var(--color-danger); background: var(--color-surface); }
+
+    /* ════ 方案B · 柔和填充表单控件（2026-08-13，作用域限编辑区 .rc-edit-grid，不影响预览/其他页）════ */
+    /* input / select：sidebar 柔和填充，hover 显边，focus 浮白 + ring */
+    .tool-receipt .rc-edit-grid input.form-input,
+    .tool-receipt .rc-edit-grid select.form-input {
+        width: 100%; box-sizing: border-box;
+        background: var(--color-sidebar); border: 1px solid transparent;
+        border-radius: var(--radius-md); padding: 7px 10px;
+        font-family: inherit; font-size: 0.85rem; color: var(--color-text);
+        outline: none; transition: background .15s, border-color .15s, box-shadow .15s;
+    }
+    .tool-receipt .rc-edit-grid input.form-input:hover,
+    .tool-receipt .rc-edit-grid select.form-input:hover { border-color: var(--color-border); }
+    .tool-receipt .rc-edit-grid input.form-input:focus,
+    .tool-receipt .rc-edit-grid select.form-input:focus {
+        background: var(--color-surface); border-color: var(--color-border-strong);
+        box-shadow: 0 0 0 3px var(--color-ring);
+    }
+    .tool-receipt .rc-edit-grid input.form-input:disabled,
+    .tool-receipt .rc-edit-grid select.form-input:disabled { opacity: .55; cursor: not-allowed; }
+    /* 数字类：等宽右对齐 */
+    .tool-receipt .rc-edit-grid input[type="number"].form-input {
+        font-family: var(--font-mono); font-variant-numeric: tabular-nums; text-align: right;
+    }
+    /* select 自定义箭头（data URI 内色值=text-secondary，CSS 变量不可入内）*/
+    .tool-receipt .rc-edit-grid select.form-input {
+        appearance: none; -webkit-appearance: none; cursor: pointer; padding-right: 26px;
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%2352514e' fill='none' stroke-width='1.4'/%3E%3C/svg%3E");
+        background-repeat: no-repeat; background-position: right 9px center;
+    }
+    /* 分段选择器（主图模式）：radio 视觉隐藏，label 呈分段项 */
+    .tool-receipt .rc-seg {
+        display: flex; gap: 2px; padding: 3px; margin-bottom: 8px;
+        background: var(--color-sidebar); border-radius: var(--radius-md);
+    }
+    .tool-receipt .rc-seg-item {
+        flex: 1; text-align: center; padding: 5px 4px; border-radius: 5px;
+        font-size: 0.76rem; color: var(--color-text-tertiary); cursor: pointer;
+        user-select: none; transition: background .15s, color .15s, box-shadow .15s;
+    }
+    .tool-receipt .rc-seg-item:hover { color: var(--color-text-secondary); }
+    .tool-receipt .rc-seg-item:has(input:checked) {
+        background: var(--color-surface); color: var(--color-text); font-weight: 700;
+        box-shadow: var(--shadow-xs);
+    }
+    .tool-receipt .rc-seg-item:has(input:focus-visible) { box-shadow: 0 0 0 3px var(--color-ring); }
+    .tool-receipt .rc-seg-item input[type="radio"] { position: absolute; opacity: 0; width: 0; height: 0; }
+    .tool-receipt .rc-seg-hint { font-size: 0.7rem; color: var(--color-text-tertiary); margin: -2px 0 8px; }
+    /* checkbox 自绘方块（条码/锯齿边）*/
+    .tool-receipt .rc-check input[type="checkbox"] {
+        appearance: none; -webkit-appearance: none;
+        width: 16px; height: 16px; margin: 0; flex-shrink: 0;
+        border: 1.5px solid var(--color-border-strong); border-radius: 5px;
+        background: var(--color-surface); cursor: pointer;
+        display: inline-grid; place-content: center;
+        transition: background .15s, border-color .15s, box-shadow .15s;
+    }
+    .tool-receipt .rc-check input[type="checkbox"]:hover { border-color: var(--color-text-tertiary); }
+    .tool-receipt .rc-check input[type="checkbox"]:checked { background: var(--color-accent); border-color: var(--color-accent); }
+    .tool-receipt .rc-check input[type="checkbox"]:checked::after {
+        content: ''; width: 8px; height: 4px;
+        border-left: 1.8px solid #fff; border-bottom: 1.8px solid #fff;
+        transform: rotate(-45deg) translateY(-1px);
+    }
+    .tool-receipt .rc-check input[type="checkbox"]:focus-visible { box-shadow: 0 0 0 3px var(--color-ring); }
+    /* color input 整条色块（纸色/墨色）*/
+    .tool-receipt .rc-edit-grid input[type="color"] {
+        appearance: none; -webkit-appearance: none;
+        width: 100%; height: 34px; padding: 4px; cursor: pointer;
+        border: 1px solid transparent; border-radius: var(--radius-md);
+        background: var(--color-sidebar); transition: border-color .15s, box-shadow .15s;
+    }
+    .tool-receipt .rc-edit-grid input[type="color"]:hover { border-color: var(--color-border); }
+    .tool-receipt .rc-edit-grid input[type="color"]:focus-visible { box-shadow: 0 0 0 3px var(--color-ring); outline: none; }
+    .tool-receipt .rc-edit-grid input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
+    .tool-receipt .rc-edit-grid input[type="color"]::-webkit-color-swatch { border: 1px solid var(--color-border); border-radius: 4px; }
+    .tool-receipt .rc-edit-grid input[type="color"]::-moz-color-swatch { border: 1px solid var(--color-border); border-radius: 4px; }
+    /* 制品行 → 柔和填充卡片；行内输入浮白（高密度行保辨识）*/
+    .tool-receipt .rc-item-row { border-color: transparent; background: var(--color-sidebar); padding: 10px; }
+    .tool-receipt .rc-item-row input.form-input,
+    .tool-receipt .rc-item-row select.form-input { background: var(--color-surface); border-color: var(--color-border); }
+    .tool-receipt .rc-item-row input.form-input:hover,
+    .tool-receipt .rc-item-row select.form-input:hover { border-color: var(--color-border-strong); }
+    .tool-receipt .rc-item-row input.form-input:focus,
+    .tool-receipt .rc-item-row select.form-input:focus { background: var(--color-surface); }
+    .tool-receipt .rc-item-row input[type="number"].form-input { padding: 6px 7px; }
+    /* Spec 24 倍率/折扣行（此前无样式裸奔，方案B 补齐胶囊语言）*/
+    .tool-receipt .rc-item-calc { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+    .tool-receipt .rc-calc-group { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+    .tool-receipt .rc-calc-label { flex: 0 0 28px; font-size: 0.72rem; font-weight: 600; color: var(--color-text-tertiary); }
+    .tool-receipt .rc-i-mult-btn {
+        border: 1px solid var(--color-border); background: var(--color-surface);
+        border-radius: var(--radius-md); padding: 4px 9px; font-size: 0.74rem;
+        color: var(--color-text-tertiary); cursor: pointer; transition: all .15s;
+    }
+    .tool-receipt .rc-i-mult-btn:hover:not(:disabled) { color: var(--color-text); border-color: var(--color-border-strong); }
+    .tool-receipt .rc-i-mult-btn.active { background: var(--color-accent); border-color: var(--color-accent); color: var(--color-accent-text, #fff); font-weight: 700; }
+    .tool-receipt .rc-i-mult-btn:disabled { opacity: .5; cursor: not-allowed; }
+    .tool-receipt .rc-edit-grid input.form-input.rc-i-mult { width: 58px; flex: 0 0 auto; }
+    /* 倍率快捷预设管理行（2026-08-13 用户需求 2a）：标签 + 数值 + 删除 */
+    .tool-receipt .rc-mp-row {
+        display: grid; grid-template-columns: minmax(0, 1fr) 84px auto;
+        gap: 6px; align-items: center; margin-bottom: 6px;
+    }
+    .tool-receipt .rc-mp-del { justify-self: center; }
+    .tool-receipt .rc-edit-grid select.form-input.rc-i-dtype { width: auto; flex: 0 0 auto; }
+    .tool-receipt .rc-edit-grid input.form-input.rc-i-dvalue { width: 88px; flex: 0 0 auto; }
+</style>
+{% endblock %}

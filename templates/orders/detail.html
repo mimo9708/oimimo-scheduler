@@ -64,6 +64,10 @@
                     <div class="kv-row"><span class="kv-key">定金</span><span class="kv-val mono">¥{{ "%.2f"|format(order.deposit) }}</span></div>
                     <div class="kv-row"><span class="kv-key">尾款</span><span class="kv-val mono">¥{{ "%.2f"|format(order.balance) }}</span></div>
                     {% endif %}
+                    {# Spec19：折扣链路（原价 → 折扣率 → 折后 → 手续费 → 实收）；无折扣不显示 #}
+                    {% if order.discount_pct is not none %}
+                    <div class="kv-row"><span class="kv-key">折扣</span><span class="kv-val mono" style="color:var(--color-info);">{{ '%g'|format(order.discount_pct) }}% → 折后 ¥{{ "%.2f"|format(order.discounted_income if order.discounted_income is not none else order.income) }}</span></div>
+                    {% endif %}
                     <div class="kv-row" style="border-top:1px solid var(--color-border);padding-top:6px;margin-top:2px;">
                         <span class="kv-key" style="font-weight:700;">实收</span>
                         <span class="kv-val mono" style="font-weight:700;color:var(--color-success);">¥{{ "%.2f"|format(order.actual_received) }}</span>
@@ -125,6 +129,11 @@
         {% endif %}
     </div>
 </div>
+
+{# Spec 26：分期单收款流水卡片（决策 D2/D4：整单模式不渲染任何分期 UI） #}
+{% if (order.payment_mode or 'simple') == 'installment' %}
+{% include "partials/_order_payments.html" %}
+{% endif %}
 
 <!-- 作品图片：瀑布流画廊（P15e，与画廊页视觉一致；上传仅编辑模式提供） -->
 <div class="card" style="margin-bottom:var(--space-md);">
@@ -212,8 +221,10 @@
         idx = (idx + 1) % detailItems.length;
         showDetailImage();
     };
-    document.addEventListener('keydown', function(e) {
-        if (!lb || lb.style.display === 'none') return;
+    // onceBind：boosted 导航重执行本脚本时防重复挂载；lb 动态解析，跨导航有效
+    onceBind(document, 'keydown', 'order-detail-lightbox-keys', function(e) {
+        var lbEl = document.getElementById('detail-lightbox');
+        if (!lbEl || lbEl.style.display === 'none') return;
         if (e.key === 'Escape') window.closeDetailLightbox();
         else if (e.key === 'ArrowLeft') window.detailLightboxPrev();
         else if (e.key === 'ArrowRight') window.detailLightboxNext();

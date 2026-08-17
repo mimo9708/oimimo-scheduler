@@ -226,7 +226,9 @@ function goPerPage(n) {
 }
 
 (function() {
-    var selectedIds = new Set();
+    // 卡 156：Set 挂 window——boosted 导航重执行本脚本时新建；onceBind 的 afterSwap 处理器动态取最新 Set
+    window.__orderListSelected = new Set();
+    var selectedIds = window.__orderListSelected;
 
     window.toggleAll = function(el) {
         document.querySelectorAll('.order-checkbox').forEach(function(cb) { cb.checked = el.checked; });
@@ -331,9 +333,10 @@ function goPerPage(n) {
     }
 
     // HTMX refresh: 表格被替换后（筛选或批量操作后），完整重置选择状态
-    document.addEventListener('htmx:afterSwap', function(evt) {
-        if (evt.detail.target.id === 'order-table-body') {
-            selectedIds.clear();
+    // （onceBind：boosted 导航重执行本脚本时防重复挂载；卡 156：历史恢复的 afterSwap 无 target，须守卫）
+    onceBind(document, 'htmx:afterSwap', 'orders-list-reset-selection', function(evt) {
+        if (evt.detail && evt.detail.target && evt.detail.target.id === 'order-table-body') {
+            window.__orderListSelected.clear();
             var bar = document.getElementById('batch-bar');
             if (bar) bar.style.display = 'none';
             var cnt = document.getElementById('batch-count');

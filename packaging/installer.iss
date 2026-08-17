@@ -1,4 +1,4 @@
-﻿; ============================================================
+; ============================================================
 ;  installer.iss - oimimo Inno Setup script
 ;  Compile: called by build.bat via ISCC.exe, or open in Inno Setup IDE
 ;  Prereq: run PyInstaller first to produce ..\dist\oimimo\
@@ -7,7 +7,7 @@
 #define MyAppName "oimimo"
 #define MyAppDisplayName "oimimo scheduler"
 #ifndef MyAppVersion
-  #define MyAppVersion "1.3.1"
+  #define MyAppVersion "1.4.0"
 #endif
 #define MyAppPublisher "oimimo"
 #define MyAppExeName "oimimo.exe"

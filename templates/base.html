@@ -6,16 +6,33 @@
     <title>{% block title %}oimimo scheduler{% endblock %}</title>
 
     <!-- 本地 vendor：全局必需库（HTMX + Lucide + JsBarcode）改为本地引用，离线秒开、不再阻塞等待外网 CDN。
-         页面专属库（Gantt/Chart/FullCalendar/Sortable）仍在各页面 head_extra 按需加载。 -->
+         页面专属库（Gantt/Chart/FullCalendar/Sortable/gridstack）卡 156 起统一全局加载——
+         hx-boost 局部导航下 htmx 2 剥离响应 head（makeFragment），head_extra 按需加载不可靠。 -->
     <script src="{{ url_for('static', filename='vendor/htmx.min.js') }}"></script>
     <script src="{{ url_for('static', filename='vendor/lucide.min.js') }}"></script>
     <!-- JsBarcode：小票底部条码（订单创建时间编码） -->
     <script src="{{ url_for('static', filename='vendor/jsbarcode.all.min.js') }}"></script>
+    <!-- 卡 156 全局 vendor：原各页 head_extra 按需库（体积小、本地加载、各库作用域独立无冲突） -->
+    <script src="{{ url_for('static', filename='vendor/frappe-gantt.min.js') }}"></script>
+    <script src="{{ url_for('static', filename='vendor/fullcalendar.index.global.min.js') }}"></script>
+    <script src="{{ url_for('static', filename='vendor/chart.min.js') }}"></script>
+    <script src="{{ url_for('static', filename='vendor/gridstack-all.js') }}"></script>
+    <script src="{{ url_for('static', filename='vendor/sortable.min.js') }}"></script>
+
+    <!-- 卡 156：htmx 配置——View Transitions 转场（不支持浏览器自动回退普通 swap） -->
+    <meta name="htmx-config" content='{"globalViewTransitions": true}'>
+
+    <!-- 卡 156：全局 JS 移入 head——hx-boost swap 会重执行 body 内 <script src>（htmx executeScriptTags），
+         导致每次导航重复下载执行、监听重复绑定；head 不参与 swap，仅加载执行一次 -->
+    <script src="{{ url_for('static', filename='app.js') }}?v={{ APP_VERSION }}"></script>
+    <script src="{{ url_for('static', filename='datetime-toggle.js') }}?v={{ APP_VERSION }}"></script>
 
     <!-- Styles -->
     <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='logo.svg') }}">
     <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='logo.ico') }}">
-    <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='vendor/frappe-gantt.min.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='vendor/gridstack.min.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}?v={{ APP_VERSION }}">
     {% if theme_css %}
     <style>{{ theme_css|safe }}</style>
     {% endif %}
@@ -36,10 +53,10 @@
 
     {% block head_extra %}{% endblock %}
 </head>
-<body>
+<body hx-boost="true">
     <div class="app-layout">
-        <!-- 侧边栏 -->
-        <aside class="sidebar" id="sidebar">
+        <!-- 侧边栏（卡 156：hx-preserve 保留不随 boosted swap 替换，active 高亮由 app.js 手动更新） -->
+        <aside class="sidebar" id="sidebar" hx-preserve="true">
             <div class="sidebar-brand">
                 <img src="{{ url_for('static', filename='logo.svg') }}"
                      class="brand-icon" alt="oimimo"
@@ -87,9 +104,13 @@
                     <i data-lucide="plus-circle" class="nav-icon"></i>
                     <span>新建订单</span>
                 </a>
-                <a href="#" onclick="openCenterModal('/orders/templates', '模板管理');return false;" class="nav-item">
+                <a href="/templates" class="nav-item {{ 'active' if request.path.startswith('/templates') }}">
                     <i data-lucide="layout-template" class="nav-icon"></i>
                     <span>模板管理</span>
+                </a>
+                <a href="/tools" class="nav-item {{ 'active' if request.path.startswith('/tools') }}">
+                    <i data-lucide="puzzle" class="nav-icon"></i>
+                    <span>小工具</span>
                 </a>
             </nav>
             <div class="sidebar-footer">
@@ -103,7 +124,7 @@
         <!-- 主内容区 -->
         <main class="main-content" id="main-content">
             <!-- 面包屑导航（一级页不显示） -->
-            {% set primary_pages = ['/', '/income', '/calendar', '/orders', '/orders/kanban', '/customers', '/gallery', '/settings'] %}
+            {% set primary_pages = ['/', '/income', '/calendar', '/orders', '/orders/kanban', '/customers', '/gallery', '/settings', '/templates', '/tools'] %}
             {% if request.path not in primary_pages %}
             <nav class="breadcrumb-bar">
                 <a href="/" class="breadcrumb-link">主页</a>
@@ -129,6 +150,13 @@
                 {% else %}
                 <span class="breadcrumb-sep">›</span>
                 <span class="breadcrumb-current">{% if breadcrumb_title is defined %}{{ breadcrumb_title }}{% else %}客户详情{% endif %}</span>
+                {% endif %}
+                {% elif request.path.startswith('/tools/') %}
+                <span class="breadcrumb-sep">›</span>
+                <a href="/tools" class="breadcrumb-link">小工具</a>
+                {% if tool is defined and tool %}
+                <span class="breadcrumb-sep">›</span>
+                <span class="breadcrumb-current">{{ tool.name|e }}</span>
                 {% endif %}
                 {% else %}
                 <span class="breadcrumb-sep">›</span>
@@ -199,13 +227,13 @@
     <script>window.__SHORTCUTS = {{ shortcuts|tojson }};</script>
     <!-- #41：版本号与上传版仓库注入（app.js 更新检测读取） -->
     <script>window.__APP_VERSION = {{ APP_VERSION|tojson }}; window.__GITHUB_REPO = {{ GITHUB_REPO|tojson }};</script>
-    <script src="{{ url_for('static', filename='app.js') }}"></script>
-    <script src="{{ url_for('static', filename='datetime-toggle.js') }}"></script>
     <script>
-        // 初始化 Lucide 图标
+        // 初始化 Lucide 图标；afterSwap 重渲染只绑一次（卡 156：boosted 导航会重执行本内联脚本）
         lucide.createIcons();
-        // HTMX after-swap 重新渲染图标
-        document.addEventListener('htmx:afterSwap', () => lucide.createIcons());
+        if (!window.__lucideAfterSwapBound) {
+            window.__lucideAfterSwapBound = true;
+            document.addEventListener('htmx:afterSwap', function() { lucide.createIcons(); });
+        }
     </script>
     {% block scripts %}{% endblock %}
 </body>

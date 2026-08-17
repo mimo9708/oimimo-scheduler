@@ -1,14 +1,6 @@
 {% extends "base.html" %}
 {% block title %}收入看板 — oimimo scheduler{% endblock %}
 
-{% block head_extra %}
-    <!-- Chart.js（仅收入看板图表） -->
-    <script src="{{ url_for('static', filename='vendor/chart.min.js') }}"></script>
-    <!-- P21a gridstack（仅收入看板自定义布局；加载失败时页面退化为顺序块流） -->
-    <link rel="stylesheet" href="{{ url_for('static', filename='vendor/gridstack.min.css') }}">
-    <script src="{{ url_for('static', filename='vendor/gridstack-all.js') }}"></script>
-{% endblock %}
-
 {% block content %}
 <div class="dashboard">
 
@@ -47,7 +39,7 @@
       <div class="grid-stack-item-content">
         <section class="card dash-block" data-block-id="monthly-stats" data-module="monthly-stats" data-module-title="月度收入统计">
             <div class="card-header">
-                <span class="hint" title="按排期月份 · 净额">月度收入统计（已完成）</span>
+                <span class="hint" title="Spec 26：按到账归属 · 净额（分期按笔到账，整单按排期月）">月度收入统计（已完成）</span>
             </div>
             <div class="card-body"><div class="chart-container" style="cursor:pointer;"><canvas id="monthly-stats-chart"></canvas></div></div>
         </section>
@@ -75,7 +67,7 @@
       <div class="grid-stack-item-content">
         <section class="card dash-block" data-block-id="projected" data-module="projected" data-module-title="每月预计收入">
             <div class="card-header">
-                <span class="hint" title="按排期月份 · 净额">每月预计收入（进行中）</span>
+                <span class="hint" title="Spec 26：待收部分按排单月 · 净额">每月预计收入（进行中）</span>
             </div>
             <div class="card-body"><div class="chart-container" style="cursor:pointer;"><canvas id="projected-chart"></canvas></div></div>
         </section>
@@ -198,6 +190,15 @@ function updateParam(key, value) {
 }
 
 (function() {
+    // 卡 156：boosted 重进本页时旧 canvas 已随旧 DOM 移除，但 Chart.js 实例仍挂 registry。
+    // getChart 按 canvas 元素身份匹配（新 canvas 匹配不到旧实例），故直接遍历 registry 销毁——
+    // 本页为唯一 Chart 使用页，旧实例全部属于已移除 DOM，销毁无风险
+    if (typeof Chart !== 'undefined' && Chart.instances) {
+        Object.keys(Chart.instances).forEach(function(k) {
+            try { Chart.instances[k].destroy(); } catch (e) {}
+        });
+    }
+
     var selectedYear = {{ selected_year }};
     // P20a：主题样式件（金额 tooltip/ticks/数据标签统一自 app.js chartTheme）
     var theme = chartTheme();

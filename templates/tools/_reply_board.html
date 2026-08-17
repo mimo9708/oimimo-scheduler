@@ -1,0 +1,49 @@
+{# 回复模板 #rt-app 整区片段（分组侧栏 + 卡片网格）；页面 include + 写操作 HX-Retarget 复用 #}
+{% set total = groups | sum(attribute='count') %}
+<aside class="rt-groups">
+    <a href="/tools/reply-templates/" class="rt-group-link {{ 'active' if not current_group }}" data-group="__all__">
+        <span class="rt-group-name">全部</span>
+        <span class="rt-group-count">{{ total }}</span>
+    </a>
+    {% for g in groups %}
+    <a href="/tools/reply-templates/?group={{ g.name|urlencode }}"
+       class="rt-group-link {{ 'active' if current_group == g.name }}" data-group="{{ g.name|e }}">
+        <span class="rt-group-name">{{ g.name|e }}</span>
+        <span class="rt-group-count">{{ g.count }}</span>
+    </a>
+    {% endfor %}
+</aside>
+
+{% if templates %}
+<div class="rt-grid">
+    {% for t in templates %}
+    <div class="card rt-card" data-title="{{ t.title|e }}">
+        <div class="rt-card-head">
+            <div class="rt-title">{{ t.title|e }}</div>
+            <span class="rt-badge" title="{{ t.group_name|e }}">{{ t.group_name|e }}</span>
+        </div>
+        <div class="rt-preview">{{ t.content|e }}</div>
+        {# 复制源：隐藏节点 textContent（不做高亮改动，保证复制内容一致） #}
+        <span class="rt-src" hidden>{{ t.content|e }}</span>
+        <div class="rt-card-actions">
+            <button type="button" class="btn btn-ghost btn-sm" onclick="rt_copy(this)">复制</button>
+            <button type="button" class="btn btn-ghost btn-sm"
+                    onclick="openCenterModal('/tools/reply-templates/{{ t.id }}/edit', '编辑回复模板')">编辑</button>
+            <form hx-post="/tools/reply-templates/{{ t.id }}/delete" style="display:inline;"
+                  onsubmit="return confirm('删除模板「{{ t.title|e }}」？');">
+                <input type="hidden" name="return_group" value="{{ current_group|e }}">
+                <button type="submit" class="btn btn-ghost btn-sm" style="color:var(--color-danger);">删除</button>
+            </form>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<div class="empty-state" style="padding:56px 16px;grid-column:1/-1;">
+    <div class="empty-state-icon">💬</div>
+    <div class="empty-state-text">{{ '当前分组还没有模板' if current_group else '还没有回复模板' }}</div>
+    <div style="font-size:0.8rem;color:var(--color-text-tertiary);margin-top:6px;">
+        把常用的话术存进来，接单沟通一键复制。
+    </div>
+</div>
+{% endif %}

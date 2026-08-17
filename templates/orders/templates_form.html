@@ -1,8 +1,7 @@
-{# 模板管理 — 新建/编辑模板表单（渲染进 #tpl-mgr-list，独立于订单，不写 orders 表） #}
+{# 模板管理 — 新建/编辑模板表单字段区（Spec 18 / 任务卡 78-79）：
+   纯字段区，由 templates_page_form.html 的 <form method="post"> 外壳 include。
+   旧模态双模式分支已随卡 79 死代码清理移除。 #}
 {% set d = (tpl.data if tpl else {}) or {} %}
-<form hx-post="{{ '/orders/templates' if is_new else '/orders/templates/' ~ tpl.id }}"
-      hx-target="#tpl-mgr-list" hx-swap="innerHTML"
-      style="display:flex;flex-direction:column;gap:var(--space-sm);">
     <div class="form-group">
         <label for="tpl-name">模板名称 *</label>
         <input type="text" name="name" id="tpl-name" required
@@ -70,6 +69,17 @@
             {% endfor %}
         </select>
     </div>
+    {# Spec 26：模板可携带收款模式快照（D10 白名单已登记；预填到新建订单表单） #}
+    <div class="form-group">
+        <label>收款方式</label>
+        <select name="payment_mode" onchange="togglePaymentsModeHint(this)">
+            <option value="simple" {% if (d.payment_mode or 'simple') == 'simple' %}selected{% endif %}>整单 · 按排单月计</option>
+            <option value="installment" {% if d.payment_mode == 'installment' %}selected{% endif %}>分期 · 按到账月计</option>
+        </select>
+        <div class="payments-mode-hint" style="display:none;">
+            分期：按每笔到账记收入，到账记录在订单详情页「收款流水」卡片管理；已有到账记录时不可切回整单。
+        </div>
+    </div>
     <div class="form-group">
         <label>原订单链接</label>
         <input type="url" name="platform_url" value="{{ d.platform_url or '' }}" placeholder="https://...">
@@ -85,8 +95,14 @@
         </div>
         <div class="form-group">
             <label>手续费 (%)</label>
-            <input type="number" name="platform_fee_pct" step="0.1" min="0" max="100" value="{{ d.platform_fee_pct or '' }}">
+            <input type="number" name="platform_fee_pct" step="0.1" min="0" max="100" value="{{ d.platform_fee_pct if d.platform_fee_pct is not none else '' }}">
         </div>
+    </div>
+    {# Spec19：模板可携带折扣快照（预填到新建订单表单；留空 = 不打折） #}
+    <div class="form-group">
+        <label>折扣 (%)</label>
+        <input type="number" name="discount_pct" id="tpl-discount-pct" step="0.1" min="1" max="100"
+               value="{{ d.discount_pct if d.discount_pct is not none else '' }}" placeholder="留空 = 不打折">
     </div>
     {# 排期字段 — 与新建订单表单同步 #}
     <div style="font-size:0.82rem;font-weight:600;color:var(--color-text-secondary);margin-top:var(--space-sm);">排期</div>
@@ -125,14 +141,23 @@
         <label>备注</label>
         <textarea name="notes" rows="2">{{ d.notes or '' }}</textarea>
     </div>
-    <div style="display:flex;justify-content:flex-end;gap:8px;padding-top:var(--space-sm);border-top:1px solid var(--color-border);">
-        <button type="submit" class="btn btn-primary">{{ '创建模板' if is_new else '保存修改' }}</button>
-        <button type="button" class="btn btn-ghost"
-                hx-get="/orders/templates/list" hx-target="#tpl-mgr-list" hx-swap="innerHTML">取消</button>
-    </div>
-</form>
 <script>
 var _TPL_FLOWS = {{ STAGE_FLOWS | tojson }};
+// Spec 26：模板携带分期时初始化模式提示条显示态
+(function() {
+    var pmSel = document.querySelector('select[name="payment_mode"]');
+    if (pmSel && typeof togglePaymentsModeHint === 'function') togglePaymentsModeHint(pmSel);
+})();
+// Spec19：客户默认折扣映射（id → discount_pct，null = 无折扣），select change 时带出到模板快照
+var _TPL_CUSTOMER_DISCOUNTS = { {% for c in customers %}{{ c.id }}: {{ c.discount_pct if c.discount_pct is not none else 'null' }}{{ ',' if not loop.last }}{% endfor %} };
+(function() {
+    var sel = document.querySelector('[name="customer_id"]');
+    if (!sel) return;
+    sel.addEventListener('change', function() {
+        var v = this.value && _TPL_CUSTOMER_DISCOUNTS[this.value];
+        document.getElementById('tpl-discount-pct').value = (v !== undefined && v !== null) ? v : '';
+    });
+})();
 function onTplFlowChange() {
     var sel = document.getElementById('tpl-stage-flow-preset');
     var val = sel.value;

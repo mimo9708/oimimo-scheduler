@@ -98,6 +98,17 @@
                 {% endfor %}
             </select>
         </div>
+        {# Spec 26：收款模式开关（默认整单，老习惯无感；分期单创建后在详情页记笔） #}
+        <div class="form-group">
+            <label for="payment_mode">收款方式</label>
+            <select name="payment_mode" onchange="togglePaymentsModeHint(this)">
+                <option value="simple" {% if (prefill.payment_mode or 'simple') == 'simple' %}selected{% endif %}>整单 · 按排单月计</option>
+                <option value="installment" {% if prefill.payment_mode == 'installment' %}selected{% endif %}>分期 · 按到账月计</option>
+            </select>
+            <div class="payments-mode-hint" style="display:none;">
+                分期单保存后，在订单详情页「收款流水」卡片记录每笔到账（金额/日期/备注）；已有到账记录时不可切回整单。
+            </div>
+        </div>
       </div>
 
       <!-- 右栏：链接 / 财务 / 排期 / 备注 -->
@@ -116,17 +127,28 @@
                 <input type="number" name="balance" step="0.01" min="0" value="{{ prefill.balance or 0 }}" oninput="calcModalActual()">
             </div>
         </div>
-        <div class="form-group" id="modal-fee-field">
-            <label for="platform_fee_pct">手续费 (%)</label>
-            <input type="number" name="platform_fee_pct" step="0.1" min="0" max="100" value="{{ prefill.platform_fee_pct if prefill.platform_fee_pct else '%.1f'|format(DEFAULT_FEES.get(prefill.source or '米画师', 5)) }}" oninput="calcModalActual()">
+        <div class="form-row">
+            <div class="form-group" id="modal-fee-field">
+                <label for="platform_fee_pct">手续费 (%)</label>
+                <input type="number" name="platform_fee_pct" step="0.1" min="0" max="100" value="{{ prefill.platform_fee_pct if prefill and prefill.platform_fee_pct is not none else '%.1f'|format(DEFAULT_FEES.get(prefill.source or '米画师', 5)) }}" oninput="calcModalActual()">
+            </div>
+            {# Spec19：订单级折扣（留空 = 不打折；选客户自动带出） #}
+            <div class="form-group">
+                <label>折扣 (%)</label>
+                <input type="number" name="discount_pct" step="0.1" min="1" max="100"
+                       value="{{ prefill.discount_pct if prefill and prefill.discount_pct is not none else '' }}"
+                       placeholder="留空 = 不打折" oninput="calcModalActual()" id="modal-discount-pct">
+            </div>
         </div>
         <div style="margin-top:var(--space-sm);padding:10px;background:var(--color-bg);border-radius:var(--radius-sm);font-size:0.85rem;" id="modal-preview-platform">
             收入: <strong id="modal-income">¥0</strong>
+            折后: <strong id="modal-discounted" style="color:var(--color-info);">¥0</strong>
             手续费: <strong id="modal-fee" style="color:var(--color-danger);">¥0</strong>
             实收: <strong id="modal-actual" style="color:var(--color-success);">¥0</strong>
         </div>
         <div style="margin-top:var(--space-sm);padding:10px;background:var(--color-bg);border-radius:var(--radius-sm);font-size:0.85rem;display:none;" id="modal-preview-direct">
             定金+尾款: <strong id="modal-total">¥0</strong>
+            折后: <strong id="modal-discounted2" style="color:var(--color-info);">¥0</strong>
             实收: <strong id="modal-actual2" style="color:var(--color-success);">¥0</strong>
         </div>
         <div class="schedule-group" style="margin-top:var(--space-md);">
@@ -167,7 +189,6 @@
     {# P16g：底部操作栏已移至表单顶部，此处不再重复 #}
 </form>
 
-<script src="/static/datetime-toggle.js"></script>
 <script>
 // 初始化双模式时间选择器（setTimeout 确保 HTMX 注入后 DOM 就绪）
 setTimeout(function() { DateTimeToggle.initAll('#center-modal-body .date-field input[type="date"], #center-modal-body .date-field input[type="datetime-local"]'); }, 0);
@@ -183,6 +204,17 @@ setTimeout(function() { DateTimeToggle.initAll('#center-modal-body .date-field i
 
 var PLATFORM = {{ PLATFORM_SOURCES|map('string')|list|tojson }};
 var MODAL_FEES = {{ DEFAULT_FEES|tojson }};
+// Spec19：客户默认折扣映射（id → discount_pct，null = 无折扣），select change 时带出
+var MODAL_CUSTOMER_DISCOUNTS = { {% for c in customers %}{{ c.id }}: {{ c.discount_pct if c.discount_pct is not none else 'null' }}{{ ',' if not loop.last }}{% endfor %} };
+(function() {
+    var sel = document.querySelector('#customer-select-wrapper-modal select');
+    if (!sel) return;
+    sel.addEventListener('change', function() {
+        var v = this.value && MODAL_CUSTOMER_DISCOUNTS[this.value];
+        document.getElementById('modal-discount-pct').value = (v !== undefined && v !== null) ? v : '';
+        calcModalActual();
+    });
+})();
 // #43：记录上次来源，只有来源真正变化时才用设置的默认费率覆盖费率框（手改后不被强制改回）
 var modalLastSource = document.querySelector('[name="source"]').value || '';
 function isPlat() {
@@ -202,22 +234,33 @@ function toggleModalFee() {
     calcModalActual();
 }
 function calcModalActual() {
+    // Spec19 D4 先折后费：折后 = round(原价×折扣/100, 2) → 费按折后 → 实收 = 折后 − 费（直接来源实收 = 折后）
     var d = parseFloat(document.querySelector('[name="deposit"]').value) || 0;
     var b = parseFloat(document.querySelector('[name="balance"]').value) || 0;
+    var disc = parseFloat(document.getElementById('modal-discount-pct').value);
+    var income = d + b, discounted = (disc > 0 && disc <= 100) ? Math.round(income * disc) / 100 : income;
     var p = isPlat() ? (parseFloat(document.querySelector('[name="platform_fee_pct"]').value) || 0) : 0;
-    var income = d + b, fee = Math.round(income * p) / 100, actual = income - fee;
+    var fee = Math.round(discounted * p) / 100, actual = discounted - fee;
     if (isPlat()) {
         document.getElementById('modal-income').textContent = '¥' + income.toFixed(2);
+        document.getElementById('modal-discounted').textContent = '¥' + discounted.toFixed(2);
         document.getElementById('modal-fee').textContent = '-¥' + fee.toFixed(2);
         document.getElementById('modal-actual').textContent = '¥' + actual.toFixed(2);
     } else {
         document.getElementById('modal-total').textContent = '¥' + income.toFixed(2);
+        document.getElementById('modal-discounted2').textContent = '¥' + discounted.toFixed(2);
         document.getElementById('modal-actual2').textContent = '¥' + actual.toFixed(2);
     }
 }
 document.querySelector('[name="source"]').addEventListener('input', toggleModalFee);
 document.querySelector('[name="source"]').addEventListener('change', toggleModalFee);
-toggleModalFee();
+// Spec19：延迟初始计算——片段经 HTMX 注入后函数才就绪（立即调用会命中旧页面旧函数）
+setTimeout(toggleModalFee, 0);
+// Spec 26：模板预填分期时初始化模式提示条显示态
+setTimeout(function() {
+    var pmSel = document.querySelector('#order-form-modal select[name="payment_mode"]');
+    if (pmSel && typeof togglePaymentsModeHint === 'function') togglePaymentsModeHint(pmSel);
+}, 0);
 
 // Spec12：流程预设下拉 → 同步 stage_flow 隐藏字段 + 更新阶段 select
 var _MODAL_FLOWS = {{ STAGE_FLOWS | tojson }};

@@ -217,12 +217,14 @@ for (var key in filterSelects) {
     filterSelects[key].addEventListener('change', resetAndLoad);
 }
 
-// 底部哨兵：进入视口加载下一批
+// 底部哨兵：进入视口加载下一批（断开旧实例——boosted 导航重执行时旧哨兵已移出 DOM）
+if (window.__galleryIO) window.__galleryIO.disconnect();
 var io = new IntersectionObserver(function(entries) {
     entries.forEach(function(entry) {
         if (entry.isIntersecting) checkSentinel();
     });
 }, { rootMargin: '300px' });
+window.__galleryIO = io;
 io.observe(sentinelEl);
 
 // 首批加载
@@ -271,10 +273,10 @@ function lightboxNext() {
     if (currentLightboxIndex >= loadedItems.length - 3) loadMore();
 }
 
-// 键盘控制
-document.addEventListener('keydown', function(e) {
+// 键盘控制（onceBind：重执行防重；lb 动态解析，跨导航有效）
+onceBind(document, 'keydown', 'gallery-lightbox-keys', function(e) {
     var lb = document.getElementById('gallery-lightbox');
-    if (lb.style.display === 'none') return;
+    if (!lb || lb.style.display === 'none') return;
     if (e.key === 'Escape') closeLightbox();
     else if (e.key === 'ArrowLeft') lightboxPrev();
     else if (e.key === 'ArrowRight') lightboxNext();

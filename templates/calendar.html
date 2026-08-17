@@ -1,11 +1,6 @@
 {% extends "base.html" %}
 {% block title %}日历视图 — oimimo scheduler{% endblock %}
 
-{% block head_extra %}
-    <!-- FullCalendar（仅日历视图） -->
-    <script src="{{ url_for('static', filename='vendor/fullcalendar.index.global.min.js') }}"></script>
-{% endblock %}
-
 {% block content %}
 <div class="page-header">
     <div>
@@ -75,13 +70,13 @@
 
 {% block scripts %}
 <script>
-// 当前着色模式
-let currentColorMode = '{{ color_mode or "source" }}';
+// 当前着色模式（卡 156：var 而非 let——boosted 导航重执行内联脚本时顶层 let/const 重声明会 SyntaxError）
+var currentColorMode = '{{ color_mode or "source" }}';
 
 /* P13b F1：级联筛选（第一级维度 → 第二级联动值） */
-const FILTER_OPTIONS = JSON.parse(document.getElementById('filter-options-data')?.textContent || '{}');
+var FILTER_OPTIONS = JSON.parse(document.getElementById('filter-options-data')?.textContent || '{}');
 // 维度 → 后端参数名
-const FILTER_DIM_PARAM = {
+var FILTER_DIM_PARAM = {
     stage: 'stage', source: 'source', commission_type: 'commission_type',
     customer: 'customer_id', payment_status: 'payment_status'
 };
@@ -156,15 +151,15 @@ function clearPoolFilter() {
     applyPoolFilter();
 }
 
-// 初始化日历
-document.addEventListener('DOMContentLoaded', function() {
+// 初始化日历（卡 156：DOMContentLoaded → __pageInit，整页加载与 boosted 导航两路径由 app.js runPageInit 统一触发）
+window.__pageInit = function() {
     initCalendarWithMode(currentColorMode);
     initPoolDraggable();
-});
+};
 
-// 监听 HTMX 刷新未排期池后重新初始化拖拽
-document.addEventListener('htmx:afterSwap', function(evt) {
-    if (evt.detail.target.id === 'unscheduled-pool') {
+// 监听 HTMX 刷新未排期池后重新初始化拖拽（onceBind：boosted 导航重执行本脚本时防重复挂载；卡 156：历史恢复的 afterSwap 无 target，须守卫）
+onceBind(document, 'htmx:afterSwap', 'calendar-pool-draggable', function(evt) {
+    if (evt.detail && evt.detail.target && evt.detail.target.id === 'unscheduled-pool') {
         initPoolDraggable();
     }
 });
@@ -217,6 +212,11 @@ function changeColorMode(mode) {
 function initCalendarWithMode(colorMode) {
     const calendarEl = document.getElementById('calendar');
     if (!calendarEl) return;
+
+    // 卡 156：boosted 导航/历史恢复会重建日历 DOM，销毁旧实例防累积（对齐 income 图表处理）。
+    // 注意 id="calendar" 的命名访问使 window.calendar 未赋值时解析为 DOM 元素，须以 destroy 方法存在为判据
+    if (window.calendar && typeof window.calendar.destroy === 'function') { window.calendar.destroy(); }
+    window.calendar = null;
 
     // #42：FullCalendar 全天事件的 end 是排他日期（后端发事件时已 +1 天），
     // 拖拽回传前必须减 1 天转回包含式，否则每拖一次 scheduled_end 多存一天

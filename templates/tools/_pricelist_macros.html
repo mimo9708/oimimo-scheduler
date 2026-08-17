@@ -1,0 +1,29 @@
+{# 价目表共用宏（Spec 31 卡 144）：
+   长条 #pl-menu 与卡片 #pl-cards 双结构共用同一分节头/项目行宏，防双结构漂移。
+   宏内部类名与长条原结构逐字一致（.pl-menu-cat / .pl-menu-item 系列），样式零改动复用。 #}
+{% macro pl_cat_header(cat, idx) %}
+<div class="pl-menu-cat">
+    <span class="pl-menu-cat-no">{{ '%02d' % idx }}</span>
+    <span class="pl-menu-cat-name">{{ cat|e }}</span>
+</div>
+{% endmacro %}
+
+{% macro pl_item(it) %}
+<div class="pl-menu-item">
+    {% if it.images %}
+    <div class="pl-menu-imgs pl-imgs-{{ it.images|length }}">
+        {% for img in it.images %}
+        <img class="pl-menu-img" src="{{ img.preview_url }}" alt="{{ it.name|e }}">
+        {% endfor %}
+    </div>
+    {% endif %}
+    <div class="pl-menu-item-head">
+        <div class="pl-menu-name">{{ it.name|e }}</div>
+        <div class="pl-menu-leader"></div>
+        <div class="pl-menu-price">{{ it|price_range_fmt }}<span class="pl-menu-unit">{{ it.unit|e }}</span></div>
+    </div>
+    {% if it.description %}
+    <div class="pl-menu-desc">{{ it.description|e }}</div>
+    {% endif %}
+</div>
+{% endmacro %}

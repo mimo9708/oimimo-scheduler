@@ -1,0 +1,58 @@
+{# 回复模板表单模态片段（新建/编辑复用；校验失败 400 时带 error_text 重渲染） #}
+{% set is_new = not (tpl and tpl.id) %}
+{% set action_url = ('/tools/reply-templates/' if is_new else ('/tools/reply-templates/%d/update' % tpl.id)) %}
+<form class="tool-htmx-form rt-form" hx-post="{{ action_url }}" hx-target="#center-modal-body" hx-swap="innerHTML">
+    {% if error_text %}
+    <div class="rt-form-error">{{ error_text|e }}</div>
+    {% endif %}
+    <div class="rt-form-row">
+        <label class="rt-form-label">分组</label>
+        <input type="text" name="group_name" class="rt-form-input" list="rt-group-list" maxlength="50"
+               value="{{ (tpl.group_name if tpl else '')|e }}" placeholder="未分组（可输入新分组名）">
+        <datalist id="rt-group-list">
+            {% for g in groups %}<option value="{{ g|e }}"></option>{% endfor %}
+        </datalist>
+    </div>
+    <div class="rt-form-row">
+        <label class="rt-form-label">标题</label>
+        <input type="text" name="title" class="rt-form-input" maxlength="200"
+               value="{{ (tpl.title if tpl else '')|e }}" placeholder="例如：确认接单 / 催尾款">
+    </div>
+    <div class="rt-form-row">
+        <label class="rt-form-label">内容</label>
+        <textarea name="content" class="rt-form-textarea" rows="10" maxlength="5000"
+                  placeholder="粘贴常用话术，保留换行">{{ (tpl.content if tpl else '')|e }}</textarea>
+    </div>
+    <input type="hidden" name="return_group" value="{{ current_group|default('')|e }}">
+    <div class="rt-form-actions">
+        <button type="button" class="btn btn-ghost" onclick="closeCenterModal()">取消</button>
+        <button type="submit" class="btn btn-primary">{{ '创建' if is_new else '保存' }}</button>
+    </div>
+</form>
+<style>
+    .rt-form { display: flex; flex-direction: column; gap: var(--space-md); }
+    .rt-form-error {
+        padding: 8px 12px;
+        border-radius: var(--radius-sm);
+        background: color-mix(in srgb, var(--color-danger) 10%, transparent);
+        color: var(--color-danger);
+        font-size: 0.8rem;
+    }
+    .rt-form-row { display: flex; flex-direction: column; gap: 5px; }
+    .rt-form-label { font-size: 0.8rem; font-weight: 600; color: var(--color-text-secondary); }
+    .rt-form-input, .rt-form-textarea {
+        padding: 8px 12px;
+        border: 1px solid var(--color-border);
+        border-radius: var(--radius-md);
+        background: var(--color-bg);
+        color: var(--color-text);
+        font-size: 0.86rem;
+        font-family: inherit;
+    }
+    .rt-form-input:focus, .rt-form-textarea:focus {
+        outline: none;
+        border-color: var(--color-border-strong);
+    }
+    .rt-form-textarea { resize: vertical; line-height: 1.6; white-space: pre-wrap; }
+    .rt-form-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: var(--space-xs); }
+</style>

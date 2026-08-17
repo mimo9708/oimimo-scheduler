@@ -9,7 +9,7 @@ import sys
 import json
 import shutil
 import logging
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from datetime import date, datetime, timedelta
 
 logger = logging.getLogger(__name__)
@@ -105,6 +105,7 @@ def init_db():
             id              INTEGER PRIMARY KEY AUTOINCREMENT,
             name            TEXT    NOT NULL UNIQUE,
             platform_url    TEXT,
+            former_names    TEXT,                             -- 曾用名（逗号分隔，平台 ID 命中且改名时归档旧名）
             preferences     TEXT,
             notes           TEXT,
             tags            TEXT,
@@ -149,6 +150,7 @@ def init_db():
             scheduled_end   TEXT,
             sort_order      INTEGER NOT NULL DEFAULT 0,
             stage_flow      TEXT,                             -- 本单阶段流程快照 JSON（Spec12 阶段进度可视化）
+            payment_mode    TEXT    NOT NULL DEFAULT 'simple', -- 收款模式 simple=整单/installment=分期（Spec26）
             created_at      TEXT    NOT NULL DEFAULT (datetime('now','localtime')),
             updated_at      TEXT    NOT NULL DEFAULT (datetime('now','localtime')),
             FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL
@@ -189,7 +191,94 @@ def init_db():
             data_json   TEXT    NOT NULL,
             created_at  TEXT    NOT NULL DEFAULT (datetime('now','localtime'))
         );
+
+        -- 回复模板表（Spec 22 / 002 小工具：类剪贴板话术库，分组管理）
+        CREATE TABLE IF NOT EXISTS reply_templates (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            group_name  TEXT    NOT NULL DEFAULT '未分组',
+            title       TEXT    NOT NULL,
+            content     TEXT    NOT NULL,
+            sort_order  INTEGER NOT NULL DEFAULT 0,
+            created_at  TEXT    NOT NULL DEFAULT (datetime('now','localtime')),
+            updated_at  TEXT    NOT NULL DEFAULT (datetime('now','localtime'))
+        );
+
+        -- 价目表项目表（Spec 22 / 003 小工具：菜单式价目）
+        CREATE TABLE IF NOT EXISTS pricelist_items (
+            id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+            category           TEXT    NOT NULL DEFAULT '默认',
+            name               TEXT    NOT NULL,
+            price              REAL    NOT NULL DEFAULT 0,
+            price_max          REAL,                          -- 价格上限（2026-08-12 UX 改造：可选，>price 时展示区间）
+            unit               TEXT    NOT NULL DEFAULT '',
+            description        TEXT    NOT NULL DEFAULT '',
+            example_image_path TEXT,                         -- 旧单例图列（已迁移 pricelist_images，仅为迁移源保留）
+            sort_order         INTEGER NOT NULL DEFAULT 0,
+            created_at         TEXT    NOT NULL DEFAULT (datetime('now','localtime')),
+            updated_at         TEXT    NOT NULL DEFAULT (datetime('now','localtime'))
+        );
+
+        -- 价目表例图表（2026-08-12 UX 改造：多例图最多 3 张，对齐 P15d order_images 模式）
+        CREATE TABLE IF NOT EXISTS pricelist_images (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            item_id     INTEGER NOT NULL,
+            image_path  TEXT,                                 -- 预览图相对路径 pricelist/<iid>/preview_<key>.webp
+            sort_order  INTEGER NOT NULL DEFAULT 0,
+            created_at  TEXT    NOT NULL DEFAULT (datetime('now','localtime')),
+            FOREIGN KEY (item_id) REFERENCES pricelist_items(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_pricelist_images_item ON pricelist_images(item_id, sort_order);
+
+        -- 小票制品表（Spec 23 小票打印机：parent_id 自引用主子嵌套；NULL=主项，非空=附加服务子行）
+        CREATE TABLE IF NOT EXISTS receipt_items (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            name       TEXT    NOT NULL,
+            price      REAL    NOT NULL DEFAULT 0,   -- 主项单价；附加子行=单项加价金额
+            qty        REAL    NOT NULL DEFAULT 1,
+            parent_id  INTEGER REFERENCES receipt_items(id) ON DELETE CASCADE,
+            is_gift    INTEGER NOT NULL DEFAULT 0,   -- 1=赠品（划线价，计 0）
+            multiplier     REAL    NOT NULL DEFAULT 1.0,   -- 单品倍率（商用×2/买断×3，Spec 24）
+            mult_label     TEXT    NOT NULL DEFAULT '',    -- 倍率标签（商用/买断，小票角标）
+            discount_type  TEXT    NOT NULL DEFAULT 'none',-- 单品折扣形态 none/amount/rate
+            discount_value REAL    NOT NULL DEFAULT 0,     -- 金额 或 中文折数（8.8 折）
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT    NOT NULL DEFAULT (datetime('now','localtime'))
+        );
+
+        -- 小票样式模板表（Spec 23：config_json 只存样式与文案，D14 不存制品/计算参数）
+        CREATE TABLE IF NOT EXISTS receipt_templates (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            name        TEXT    NOT NULL,
+            config_json TEXT    NOT NULL,
+            created_at  TEXT    NOT NULL DEFAULT (datetime('now','localtime')),
+            updated_at  TEXT    NOT NULL DEFAULT (datetime('now','localtime'))
+        );
+
+        -- 分期收款流水表（Spec 26：1:N 收款事件流，一笔一行；到账即计入月度收入）
+        CREATE TABLE IF NOT EXISTS order_payments (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            order_id   INTEGER NOT NULL,
+            paid_at    TEXT    NOT NULL,                       -- 到账日期 YYYY-MM-DD（月度归属依据）
+            amount     REAL    NOT NULL CHECK(amount >= 0),    -- 到卡净额（抽成订单级一次，D1）
+            note       TEXT,                                   -- 备注（定金/阶段款/尾款，可选）
+            created_at TEXT    NOT NULL DEFAULT (datetime('now','localtime')),
+            FOREIGN KEY(order_id) REFERENCES orders(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_payments_order   ON order_payments(order_id);
+        CREATE INDEX IF NOT EXISTS idx_payments_paid_at ON order_payments(paid_at);
     """)
+
+    # Spec 24 小票计算模型重设计：receipt_items 补齐单品倍率/折扣列（新建库已在建表时定义，此处幂等）
+    for col, decl in (
+        ('multiplier', 'REAL NOT NULL DEFAULT 1.0'),
+        ('mult_label', "TEXT NOT NULL DEFAULT ''"),
+        ('discount_type', "TEXT NOT NULL DEFAULT 'none'"),
+        ('discount_value', 'REAL NOT NULL DEFAULT 0'),
+    ):
+        try:
+            conn.execute(f"ALTER TABLE receipt_items ADD COLUMN {col} {decl}")
+        except Exception:
+            pass  # 列已存在
 
     # 写入默认设置（仅当不存在时）
     _ensure_default_settings(conn)
@@ -235,11 +324,27 @@ def init_db():
         """)
     except Exception:
         pass
-    for col in ('tags',):
+    for col in ('tags', 'former_names'):
         try:
             conn.execute(f"ALTER TABLE customers ADD COLUMN {col} TEXT")
         except Exception:
             pass
+
+    # 2026-08-12 价目表 UX 改造：price_max 可选列（价格区间）+ 旧单例图列回填多图表。幂等。
+    try:
+        conn.execute("ALTER TABLE pricelist_items ADD COLUMN price_max REAL")
+    except Exception:
+        pass  # 列已存在
+    try:
+        conn.execute("""
+            INSERT INTO pricelist_images (item_id, image_path, sort_order)
+            SELECT p.id, p.example_image_path, 0
+            FROM pricelist_items p
+            WHERE p.example_image_path IS NOT NULL AND p.example_image_path != ''
+              AND NOT EXISTS (SELECT 1 FROM pricelist_images pi WHERE pi.item_id = p.id)
+        """)
+    except Exception:
+        pass
 
     # P15d 回填：已有单图（has_image=1 且有 image_url）但 order_images 尚无记录的订单，
     # 将其封面图作为首图导入多图表（幂等：仅当该订单在 order_images 中无记录时插入）
@@ -318,6 +423,32 @@ def init_db():
     except Exception:
         pass  # 列已存在
 
+    # Spec19 VIP 折扣：customers 加 is_vip/discount_pct；orders 加 discount_pct/discounted_income。
+    # 口径：discount_pct = 折后应收百分比（88 = 88 折），NULL = 不打折（D1/D2）；
+    # discounted_income = 折后金额落库（无折扣 = income），保证折/费可审计（D5）。
+    # 回填：存量订单折后 = 原价（一次性覆盖全库 NULL；幂等仅处理 NULL 行）。
+    for col in ('is_vip INTEGER NOT NULL DEFAULT 0', 'discount_pct REAL'):
+        try:
+            conn.execute(f"ALTER TABLE customers ADD COLUMN {col}")
+        except Exception:
+            pass  # 列已存在
+    for col in ('discount_pct REAL', 'discounted_income REAL'):
+        try:
+            conn.execute(f"ALTER TABLE orders ADD COLUMN {col}")
+        except Exception:
+            pass  # 列已存在
+    try:
+        conn.execute("UPDATE orders SET discounted_income = income WHERE discounted_income IS NULL")
+    except Exception:
+        pass
+
+    # Spec26 分期收款：orders 加收款模式列（simple=整单默认 / installment=分期流水）。
+    # 老订单全部 simple，行为与统计逐位不变（spec §3.2 语义冻结；新建库建表时已含，老库走此迁移）。
+    try:
+        conn.execute("ALTER TABLE orders ADD COLUMN payment_mode TEXT NOT NULL DEFAULT 'simple'")
+    except Exception:
+        pass  # 列已存在
+
     conn.commit()
     conn.close()
     # 迁移：累计消费口径变更（仅统计已归档+已完成+已结算订单），一次性重算全部客户
@@ -349,6 +480,30 @@ def init_db():
     # P20-F14：图片引用一致性自愈（用户绕过应用手动删 uploads 文件后，
     # order_images 记录与 orders 封面三列残留 → 画廊失效链接；启动时自动对齐）
     repair_image_consistency()
+    # Spec26：清理孤儿收款流水（旧版 exe 删单遗留 / 手动改库防御）
+    _cleanup_orphan_payments()
+
+
+def _cleanup_orphan_payments() -> int:
+    """Spec 26：清理无有效订单引用的收款流水（孤儿记录），返回清理条数。
+
+    来源场景：旧版 exe（不知 order_payments 表）删单后遗留、或用户绕过应用
+    手动改库。启动例行清理；失败记录日志不阻断启动（spec §7 风险登记册）。
+    """
+    try:
+        with transaction() as conn:
+            cur = conn.execute(
+                "DELETE FROM order_payments WHERE NOT EXISTS "
+                "(SELECT 1 FROM orders o WHERE o.id = order_payments.order_id)"
+            )
+            removed = cur.rowcount or 0
+        if removed:
+            logger.info('Spec26 孤儿收款记录清理：%d 条', removed)
+        return removed
+    except Exception as e:
+        logger.error('孤儿收款记录清理失败: %s', e)
+        return 0
+
 
 CHOICE_REGISTRY = {
     'stage': {
@@ -384,6 +539,11 @@ PAID_STATUSES = {'已结算'}
 # P19-F1 归档判定的收款状态集合：与收入统计拆分——
 # 免收单「要归档但不计收入」，故 PAID_STATUSES 保持收入统计专用不动，归档判定用本集合。
 ARCHIVE_PAID_STATUSES = {'已结算', '免收'}
+
+# Spec 26 收款容差与笔数上限（D12② / §3.2）：
+# 3000+2000 类浮点组合的 Σ笔 与应收判定统一按 ±0.01；笔数上限防误操作轰炸。
+PAYMENT_EPSILON = 0.01
+MAX_PAYMENTS_PER_ORDER = 50
 
 
 # P19-F10 choices 进程内缓存：一次渲染 inject_constants 连调 5 类 get_choices，
@@ -978,6 +1138,11 @@ def _ensure_default_settings(conn):
                 {'name': '完成',   'progress': 100},
             ]},
         ], ensure_ascii=False),
+        # Spec19 VIP 折扣预设：JSON 数组（客户表单折扣输入 datalist 候选值，单位 %）
+        'vip_discount_presets': json.dumps([95, 90, 88, 80]),
+        # Spec20 日历订阅：默认关闭；token 留空（开启时由设置页生成，卡 86）
+        'feed_enabled': '0',
+        'feed_token': '',
     }
     for k, v in defaults.items():
         conn.execute(
@@ -997,6 +1162,32 @@ def get_all_settings() -> dict:
     return {r['key']: r['value'] for r in rows}
 
 
+# Spec19 VIP 折扣预设兜底值（settings 缺失/损坏时使用）
+DEFAULT_VIP_DISCOUNT_PRESETS = [95, 90, 88, 80]
+
+
+def get_vip_discount_presets() -> list:
+    """Spec19：VIP 折扣预设列表（每项 ∈ (0,100] 的数字）。
+    settings 缺失/JSON 损坏/非法项全部剔除后为空时回退默认值。"""
+    raw = get_all_settings().get('vip_discount_presets', '')
+    try:
+        vals = json.loads(raw) if raw else DEFAULT_VIP_DISCOUNT_PRESETS
+    except (TypeError, ValueError):
+        logging.warning('vip_discount_presets JSON 损坏，回退默认值: %r', raw)
+        return list(DEFAULT_VIP_DISCOUNT_PRESETS)
+    if not isinstance(vals, list):
+        return list(DEFAULT_VIP_DISCOUNT_PRESETS)
+    clean = []
+    for v in vals:
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            continue
+        if 0 < f <= 100:
+            clean.append(int(f) if f == int(f) else f)
+    return clean if clean else list(DEFAULT_VIP_DISCOUNT_PRESETS)
+
+
 def update_settings(data: dict, conn=None) -> None:
     """批量更新设置；传入事务连接则不 commit（P19-F5：重命名+设置同事务）。"""
     own = conn is None
@@ -1011,6 +1202,30 @@ def update_settings(data: dict, conn=None) -> None:
         conn.close()
     # P19-F10：写设置后统一失效 choices 缓存（source_list/commission_type_list 等即时生效）
     _invalidate_choices_cache()
+
+
+# ── Spec 27 task-117：统计实验室预设 CRUD（settings 表 JSON 数组存储）──
+
+_STATS_LAB_PRESETS_KEY = 'stats_lab_presets'
+
+
+def get_stats_lab_presets() -> list:
+    """获取统计实验室预设列表。缺失 / JSON 损坏 → 返回 []。"""
+    raw = get_all_settings().get(_STATS_LAB_PRESETS_KEY, '')
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw)
+        if isinstance(data, list):
+            return data
+    except (ValueError, TypeError):
+        pass
+    return []
+
+
+def _save_stats_lab_presets(presets: list) -> None:
+    """保存预设列表（整体覆盖）。"""
+    update_settings({_STATS_LAB_PRESETS_KEY: json.dumps(presets, ensure_ascii=False)})
 
 
 def sync_choice_renames(conn, data: dict, settings_key: str, order_field: str) -> dict:
@@ -1159,17 +1374,19 @@ def resnapshot_fee_for_renamed_source(conn, order_ids: list, new_source: str) ->
             pct = 5.0
     marks = ','.join('?' * len(order_ids))
     rows = conn.execute(
-        f"SELECT id, customer_id, deposit, balance FROM orders WHERE id IN ({marks})",
+        f"SELECT id, customer_id, deposit, balance, discounted_income FROM orders WHERE id IN ({marks})",
         list(order_ids)
     ).fetchall()
     cids = set()
     for r in rows:
         income = float(r['deposit'] or 0) + float(r['balance'] or 0)
-        fee = round(income * pct / 100, 2) if pct > 0 else 0.0
+        # Spec19：费用按折后基数重算（D4 先折后费）；旧行 discounted_income 为 NULL 时兜底原价
+        base = float(r['discounted_income']) if r['discounted_income'] is not None else income
+        fee = round(base * pct / 100, 2) if pct > 0 else 0.0
         conn.execute(
             "UPDATE orders SET platform_fee_pct = ?, platform_fee = ?, actual_received = ?, "
             "updated_at = datetime('now','localtime') WHERE id = ?",
-            (pct, fee, round(income - fee, 2), r['id'])
+            (pct, fee, round(base - fee, 2), r['id'])
         )
         if r['customer_id']:
             cids.add(r['customer_id'])
@@ -1178,11 +1395,185 @@ def resnapshot_fee_for_renamed_source(conn, order_ids: list, new_source: str) ->
     return len(rows)
 
 
+# ── Spec 28 phase-14：来源删除/合并后端（task-132；设置页 UI 归 task-133）──
+
+def count_source_usage(source_name: str) -> int:
+    """来源使用计数：orders 表引用该来源的订单数（D9 删除确认对话框
+    「N 个订单受影响」数据源）。"""
+    if not source_name:
+        return 0
+    conn = get_db()
+    n = conn.execute(
+        "SELECT COUNT(*) FROM orders WHERE source = ?", (source_name,)
+    ).fetchone()[0]
+    conn.close()
+    return n
+
+
+def _purge_source_settings_keys(conn, source_name: str) -> None:
+    """清理来源专属设置键（default_fee_<s> 费率 + cal_source_<s> 日历颜色）。
+    来源删除（无引用或确认置空）后调用，防孤儿配置残留。"""
+    for key in (f'default_fee_{source_name}', f'cal_source_{source_name}'):
+        conn.execute("DELETE FROM settings WHERE key = ?", (key,))
+
+
+def merge_sources(old_names: list, new_name: str) -> dict:
+    """来源合并（D10：参考 merge_commission_types 同结构，不通用化）。
+
+    单事务内：批量迁移 orders.source → 更新 source_list（移旧保新）→
+    平台标记迁移（platform_sources：新名未标记而旧名有标记 → 继承，旧名移除）→
+    费率配置迁移（default_fee_ 前缀：同理，继承第一个旧来源）→ 日历颜色迁移
+    （cal_source_ 前缀：新名无色继承旧色，旧键删除）→ 费率快照级联
+    （resnapshot_fee_for_renamed_source：受影响订单按新来源默认费率重算
+    pct/fee/actual_received，客户统计同步刷新）。old == new_name 的项跳过。
+    返回 {'merged': {old: count}, 'total': int}。
+    """
+    if not old_names or not new_name.strip():
+        return {'merged': {}, 'total': 0}
+    new_name = new_name.strip()
+    olds = [o.strip() for o in old_names if o and o.strip() and o.strip() != new_name]
+    merged = {}
+    with transaction() as conn:
+        affected_ids: list = []
+        for old in olds:
+            ids = [r[0] for r in conn.execute(
+                "SELECT id FROM orders WHERE source = ?", (old,)
+            ).fetchall()]
+            cnt = conn.execute(
+                "UPDATE orders SET source = ?, updated_at = datetime('now','localtime') WHERE source = ?",
+                (new_name, old)
+            ).rowcount
+            if cnt > 0:
+                merged[old] = cnt
+                affected_ids.extend(ids)
+        # source_list：移除旧名，确保新名存在
+        src_row = conn.execute(
+            "SELECT value FROM settings WHERE key = 'source_list'"
+        ).fetchone()
+        if src_row:
+            items = [x.strip() for x in src_row['value'].split(',') if x.strip()]
+            items = [x for x in items if x not in olds]
+            if new_name not in items:
+                items.append(new_name)
+            conn.execute(
+                "INSERT OR REPLACE INTO settings (key, value) VALUES ('source_list', ?)",
+                (','.join(items),)
+            )
+        # 平台标记：新名未标记而旧名有标记 → 新名继承；旧名从列表移除
+        plat_row = conn.execute(
+            "SELECT value FROM settings WHERE key = 'platform_sources'"
+        ).fetchone()
+        if plat_row:
+            plats = [x.strip() for x in plat_row['value'].split(',') if x.strip()]
+            if new_name not in plats and any(o in plats for o in olds):
+                plats.append(new_name)
+            plats = [p for p in plats if p not in olds]
+            conn.execute(
+                "INSERT OR REPLACE INTO settings (key, value) VALUES ('platform_sources', ?)",
+                (','.join(plats),)
+            )
+        # 费率配置：新名无 default_fee_ 且旧名有 → 继承第一个；旧键清理
+        fee_new = conn.execute(
+            "SELECT value FROM settings WHERE key = ?", (f'default_fee_{new_name}',)
+        ).fetchone()
+        if not fee_new:
+            for old in olds:
+                old_fee = conn.execute(
+                    "SELECT value FROM settings WHERE key = ?", (f'default_fee_{old}',)
+                ).fetchone()
+                if old_fee:
+                    conn.execute(
+                        "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+                        (f'default_fee_{new_name}', old_fee['value'])
+                    )
+                    break
+        # 日历颜色：新名无色继承第一个旧色；旧键删除（含无订单旧来源，防残留）
+        color_new = conn.execute(
+            "SELECT value FROM settings WHERE key = ?", (f'cal_source_{new_name}',)
+        ).fetchone()
+        for old in olds:
+            old_color = conn.execute(
+                "SELECT value FROM settings WHERE key = ?", (f'cal_source_{old}',)
+            ).fetchone()
+            if old_color:
+                if not color_new:
+                    conn.execute(
+                        "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+                        (f'cal_source_{new_name}', old_color['value'])
+                    )
+                    color_new = old_color
+                conn.execute("DELETE FROM settings WHERE key = ?", (f'cal_source_{old}',))
+        for old in olds:
+            conn.execute("DELETE FROM settings WHERE key = ?", (f'default_fee_{old}',))
+        # 费率快照级联（同事务；平台标记已迁移，重算口径自洽）
+        if affected_ids:
+            resnapshot_fee_for_renamed_source(conn, affected_ids, new_name)
+    _invalidate_choices_cache()
+    total = sum(merged.values())
+    logger.info('来源合并：%s → 「%s」，共更新 %d 单', list(merged.keys()), new_name, total)
+    return {'merged': merged, 'total': total}
+
+
+def apply_source_deletions(conn, new_list_value, new_platform_value,
+                           confirmed_names) -> tuple:
+    """设置保存时的来源删除处理（D9）：对比 source_list 新旧值分类处置。
+
+    - 无引用：清理专属设置键（default_fee_/cal_source_），列表移除生效；
+    - 有引用且已确认（confirmed_names，前端确认对话框产出）：orders.source
+      置空 + 清理设置键；
+    - 有引用且未确认：保留该来源——回填进新列表；如原为平台来源且新
+      platform_sources 漏掉，同步回填（表单勾选框随 DOM 删除已丢失）。
+    在传入事务连接上执行不 commit；缓存失效由随后的 update_settings 统一处理。
+    返回 (修正后 source_list 或 None, 修正后 platform_sources 或 None)；
+    入参 None 表示本次保存未提交该字段，原样返回。
+    """
+    if new_list_value is None:
+        return (None, new_platform_value)
+    old_row = conn.execute(
+        "SELECT value FROM settings WHERE key = 'source_list'"
+    ).fetchone()
+    if not old_row:
+        return (new_list_value, new_platform_value)
+    confirmed = {x.strip() for x in (confirmed_names or []) if x.strip()}
+    olds = [x.strip() for x in old_row['value'].split(',') if x.strip()]
+    news = [x.strip() for x in new_list_value.split(',') if x.strip()]
+    news_set = set(news)
+    old_plat_row = conn.execute(
+        "SELECT value FROM settings WHERE key = 'platform_sources'"
+    ).fetchone()
+    old_plats = ({x.strip() for x in old_plat_row['value'].split(',') if x.strip()}
+                 if old_plat_row else set())
+    plats = ([x.strip() for x in new_platform_value.split(',') if x.strip()]
+             if new_platform_value is not None else None)
+    for s in olds:
+        if s in news_set:
+            continue
+        cnt = conn.execute(
+            "SELECT COUNT(*) FROM orders WHERE source = ?", (s,)
+        ).fetchone()[0]
+        if cnt == 0:
+            _purge_source_settings_keys(conn, s)
+        elif s in confirmed:
+            conn.execute(
+                "UPDATE orders SET source = '', updated_at = datetime('now','localtime') "
+                "WHERE source = ?", (s,)
+            )
+            _purge_source_settings_keys(conn, s)
+            logger.info('来源删除（D9 确认）：「%s」%d 单引用置空', s, cnt)
+        else:
+            news.append(s)
+            if plats is not None and s in old_plats and s not in plats:
+                plats.append(s)
+            logger.warning('来源「%s」被 %d 单引用且未确认删除，已保留（D9 保护）', s, cnt)
+    return (','.join(news), ','.join(plats) if plats is not None else None)
+
+
 # 订单模板可复用字段白名单（P18-F3：排除日期与金额派生）
 ORDER_TEMPLATE_FIELDS = (
     'customer_id', 'project_name', 'source', 'is_commercial',
-    'commission_type', 'current_stage', 'payment_status',
+    'commission_type', 'current_stage', 'payment_status', 'payment_mode',
     'platform_url', 'deposit', 'balance', 'platform_fee_pct', 'notes',
+    'discount_pct',  # Spec19 订单级折扣快照（模板可携带折扣预填）
     'stage_flow',  # Spec12 阶段流程快照（模板可携带流程）
     'scheduled_start', 'scheduled_end', 'page_deadline',  # 排期字段
     'estimated_hours', 'work_hours', 'exclude_hourly',  # 工时字段
@@ -1419,7 +1810,7 @@ def _auto_calc_ddl_status(data: dict):
 
 
 def _calc_financials(data: dict) -> dict:
-    """自动计算 income、platform_fee、actual_received
+    """自动计算 income、discounted_income、platform_fee、actual_received
 
     支持两种输入：
     - platform_fee_pct: 百分比（如 5 表示 5%），自动计算 platform_fee
@@ -1428,11 +1819,24 @@ def _calc_financials(data: dict) -> dict:
     直接来源（微信/QQ/其他）无手续费，platform_fee 强制为 0。
     P19-F9：platform_fee_pct 为订单级快照——随单落库、重算只读订单自身快照，
     与设置页当前费率脱钩（修 C5：设置页改费率静默改写历史财务）。
+    Spec15：pct 显式非 None（含 0）→ 一律按快照重算，0 → 费用清零（免手续费语义）；
+    直填金额兼容路径仅在 pct 为 None 时走（修 Bug A：编辑填 0 旧费用泄漏）。
+    Spec19：discount_pct = 折后应收百分比（88 = 88 折），NULL = 不打折（订单级快照，
+    不回溯存量，与 pct 快照同构）；**先折后费**（D4）：折后 = round(income×pct/100, 2)，
+    手续费按折后抽成，实收 = 折后 − 手续费；直接来源实收 = 折后。
     """
     deposit = float(data.get('deposit', 0) or 0)
     balance = float(data.get('balance', 0) or 0)
     income = round(deposit + balance, 2)  # #40 P4：浮点相加落库前舍入（0.1+0.2 问题）
     data['income'] = income
+
+    # Spec19 折扣段（先折）：discount_pct 非 NULL → 折后；NULL → 折后 = 原价（D4/D5）
+    disc = data.get('discount_pct')
+    if disc is not None:
+        data['discounted_income'] = round(income * float(disc) / 100, 2)
+    else:
+        data['discounted_income'] = income
+    base = data['discounted_income']  # 手续费基数：折后金额（D4 先折后费）
 
     source = data.get('source', '')
     is_platform = source in get_platform_sources()
@@ -1442,19 +1846,22 @@ def _calc_financials(data: dict) -> dict:
         data['platform_fee'] = 0.0
     else:
         # P19-F9：pct 快照保留在 data 中随单落库（不再 pop）。
-        # pct>0 → 按快照重算手续费；pct 空/0 → 保留传入 platform_fee（兼容直填金额旧路径）。
         pct = data.get('platform_fee_pct')
         if pct is None and not float(data.get('platform_fee', 0) or 0):
             # #42：创建路径 pct 缺省且无直填金额时回填来源默认费率
             #（编辑路径切换来源已在 update_order 兜底，这里补齐新单漏洞）
             pct = get_default_fee_for_source(source)
             data['platform_fee_pct'] = pct
-        if pct is not None and float(pct or 0) > 0:
-            data['platform_fee'] = round(income * float(pct) / 100, 2)
+        if pct is not None:
+            # Spec15：显式快照（含 0）→ 一律按快照重算；0 → 费用清零（免手续费）。
+            # 修 Bug A：原 pct>0 才重算，编辑填 0 时 merged 继承的旧费用金额泄漏。
+            # Spec19：基数由 income 换为折后 base（先折后费）。
+            data['platform_fee'] = round(base * float(pct) / 100, 2)
         else:
-            data['platform_fee'] = round(float(data.get('platform_fee', 0) or 0), 2)  # #40 P4：直填金额路径同样舍入
+            # pct 为 None 的直填金额兼容路径（旧数据，#40 P4 舍入保持）
+            data['platform_fee'] = round(float(data.get('platform_fee', 0) or 0), 2)
 
-    data['actual_received'] = round(data['income'] - data['platform_fee'], 2)
+    data['actual_received'] = round(base - data['platform_fee'], 2)
     return data
 
 
@@ -1475,7 +1882,9 @@ def create_order(data: dict) -> int:
             'customer_id', 'project_name', 'source', 'is_commercial',
             'commission_type', 'current_stage', 'ddl_status',
             'deposit', 'balance', 'platform_fee', 'platform_fee_pct', 'income', 'actual_received',
+            'discount_pct', 'discounted_income',  # Spec19 VIP 折扣（快照 + 折后落库）
             'payment_status', 'is_archived',
+            'payment_mode',  # Spec 26：创建路径支持分期（阶段 3；D10 编辑白名单已在 task-107 登记）
             'notes', 'custom_color', 'platform_url', 'page_deadline', 'scheduled_start', 'scheduled_end', 'sort_order',
             'completed_at', 'is_overdue',
             'estimated_hours', 'work_hours', 'exclude_hourly',  # P20b 时薪
@@ -1483,7 +1892,8 @@ def create_order(data: dict) -> int:
         ]
         nullable = {'customer_id', 'commission_type', 'notes', 'custom_color',
                     'platform_url', 'page_deadline', 'scheduled_start', 'scheduled_end', 'completed_at',
-                    'estimated_hours', 'work_hours', 'stage_flow'}
+                    'estimated_hours', 'work_hours', 'stage_flow',
+                    'discount_pct'}  # Spec19：NULL = 不打折（D2）
         # P19-F4 文本列缺省写列 DEFAULT/''，禁止写数字 0（修复幽灵值来源之一）
         text_defaults = {'project_name': '', 'source': '米画师', 'current_stage': '待开始',
                          'ddl_status': '正常', 'payment_status': '未收款'}
@@ -1531,6 +1941,7 @@ def create_order_with_template(data: dict, template_name: str | None = None,
             'customer_id', 'project_name', 'source', 'is_commercial',
             'commission_type', 'current_stage', 'ddl_status',
             'deposit', 'balance', 'platform_fee', 'platform_fee_pct', 'income', 'actual_received',
+            'discount_pct', 'discounted_income',  # Spec19 VIP 折扣（快照 + 折后落库）
             'payment_status', 'is_archived',
             'notes', 'custom_color', 'platform_url', 'page_deadline', 'scheduled_start', 'scheduled_end', 'sort_order',
             'completed_at', 'is_overdue',
@@ -1539,7 +1950,8 @@ def create_order_with_template(data: dict, template_name: str | None = None,
         ]
         nullable = {'customer_id', 'commission_type', 'notes', 'custom_color',
                     'platform_url', 'page_deadline', 'scheduled_start', 'scheduled_end', 'completed_at',
-                    'estimated_hours', 'work_hours', 'stage_flow'}
+                    'estimated_hours', 'work_hours', 'stage_flow',
+                    'discount_pct'}  # Spec19：NULL = 不打折（D2）
         text_defaults = {'project_name': '', 'source': '米画师', 'current_stage': '待开始',
                          'ddl_status': '正常', 'payment_status': '未收款'}
         row = {}
@@ -1593,31 +2005,35 @@ def get_order(order_id: int, conn=None) -> dict | None:
 
 
 # update_order 金额/财务触发字段（P19-F5 单管线判定）
-_MONEY_FIELDS = {'deposit', 'balance', 'platform_fee', 'platform_fee_pct', 'source'}
+_MONEY_FIELDS = {'deposit', 'balance', 'platform_fee', 'platform_fee_pct', 'source', 'discount_pct'}
 _DDL_TRIGGER_FIELDS = {'current_stage', 'scheduled_end', 'payment_status'}
 
 
-def update_order(order_id: int, data: dict) -> bool:
-    """更新订单（P19-F5 单管线 + 单事务）。
+def update_order(order_id: int, data: dict, conn=None) -> tuple:
+    """更新订单（P19-F5 单管线 + 单事务）。返回 (True, '') / (False, 原因)。
 
     流程：读旧单 → merge → financials（金额/来源/客户变化时）
     → ddl/archive（阶段/日期/收款变化或财务已重算时，归档经 _auto_calc_ddl_status 唯一入口）
-    → 单次 UPDATE → 对 {新客户, 旧客户} 去重 recalc。全部在同一事务连接上。
+    → Spec 26 防错守卫（免收互斥 / D12① 金额冲突 / D12③ 切回拦截，拒绝即整单回滚）
+    → 单次 UPDATE（D10 白名单含 payment_mode；D12③ 切分期自动生成初始收款）
+    → 对 {新客户, 旧客户} 去重 recalc。全部在同一事务连接上。
     消除旧版 money 分支与 customer 分支的重复执行；修 A5（换客户旧客户不刷新）。
     P19-F8：repeat 环节移除，复购标记改查询时计算（_apply_repeat_for_rows），两列不再写入。
+    Spec 26：conn= 复用外部事务（收款收齐自动结算在单事务内调用）；不传则自开，行为不变。
     """
     if not data:
-        return False
+        return (False, '无变更字段')
 
     keys = set(data.keys())
     cust_changed = 'customer_id' in keys
     needs_financials = bool(_MONEY_FIELDS & keys) or cust_changed
     needs_ddl = bool(_DDL_TRIGGER_FIELDS & keys) or needs_financials
 
-    with transaction() as conn:
+    own = conn is None
+    with (transaction() if own else nullcontext(conn)) as conn:
         existing = get_order(order_id, conn=conn)
         if not existing:
-            return False
+            return (False, '订单不存在')
         old_cid = existing.get('customer_id')
 
         merged = {**existing, **data}
@@ -1634,6 +2050,30 @@ def update_order(order_id: int, data: dict) -> bool:
             # DDL 重算 + 「终态+已结算/免收」自动归档（内部经 _apply_archive_to_data）
             merged = _auto_calc_ddl_status(merged)
 
+        # ── Spec 26 防错守卫（拒绝 = 整单事务回滚，路由层按 (ok, err) 转提示）──
+        target_mode = merged.get('payment_mode') or 'simple'
+        mode_switch = ('payment_mode' in keys
+                       and (data.get('payment_mode') or 'simple')
+                       != (existing.get('payment_mode') or 'simple'))
+        if mode_switch and target_mode == 'simple':
+            # D12③：installment→simple 有收款记录 → 拒绝（先清空再切）
+            cnt = conn.execute(
+                "SELECT COUNT(*) FROM order_payments WHERE order_id = ?", (order_id,)
+            ).fetchone()[0]
+            if cnt:
+                return (False, f'本单已有 {cnt} 笔收款记录，清空后才能切回整单收款')
+        if target_mode == 'installment':
+            # 免收互斥（spec §3.2：免收走 simple 归档语义；覆盖切向与置免收双向组合）
+            if merged.get('payment_status') == '免收':
+                return (False, '免收订单与分期收款互斥（免收按整单归档语义处理）')
+            # D12①：金额改小 → 重算后净额不得低于已到账（容差 0.01）
+            if needs_financials:
+                received = get_received_amount(order_id, conn=conn)
+                new_net = float(merged.get('actual_received') or 0)
+                if received > 0 and new_net < received - PAYMENT_EPSILON:
+                    return (False, f'应收净额 {new_net:.2f} 已低于已到账 {received:.2f}，'
+                                   '请先核减收款记录再修改金额')
+
         merged['updated_at'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
         # 过滤掉非 orders 表的列（如 JOIN 带来的 customer_name、查询时计算的 repeat 两列）
@@ -1641,7 +2081,9 @@ def update_order(order_id: int, data: dict) -> bool:
             'id', 'customer_id', 'project_name', 'source', 'is_commercial',
             'commission_type', 'current_stage', 'ddl_status',
             'deposit', 'balance', 'platform_fee', 'platform_fee_pct', 'income', 'actual_received',
+            'discount_pct', 'discounted_income',  # Spec19 VIP 折扣（快照 + 折后落库）
             'payment_status', 'is_archived',
+            'payment_mode',  # Spec 26 D10：收款模式白名单登记（保持性：切换保存后重开不丢）
             'notes', 'custom_color', 'platform_url', 'page_deadline', 'scheduled_start', 'scheduled_end',
             'image_url', 'image_path', 'has_image',
             'completed_at', 'is_overdue',
@@ -1659,6 +2101,22 @@ def update_order(order_id: int, data: dict) -> bool:
         conn.execute(f"UPDATE orders SET {set_clause} WHERE id = ?",
                      list(payload.values()) + [order_id])
 
+        # D12③：simple→installment 且已收齐 → 同事务自动生成 1 笔初始收款
+        # （保数字连续性：否则已结算单切分期后已到账瞬间归零）；paid_at 取
+        # 有效排期日，无/非法排期退今日；0 元已结算单无款可搬，跳过并留痕。
+        if (mode_switch and target_mode == 'installment'
+                and merged.get('payment_status') in get_paid_statuses()):
+            amount = round(float(merged.get('actual_received') or 0), 2)
+            if amount > 0:
+                d = _safe_iso(merged.get('scheduled_end'))
+                paid_at = d.isoformat() if d else date.today().isoformat()
+                conn.execute(
+                    "INSERT INTO order_payments (order_id, paid_at, amount, note) "
+                    "VALUES (?, ?, ?, ?)",
+                    (order_id, paid_at, amount, '切换分期自动生成（原整单已结算）'))
+                logger.info('Spec26 D12③ 订单 %s 切分期：自动生成初始收款 %s ¥%.2f',
+                            order_id, paid_at, amount)
+
         # 客户统计：新旧客户集去重 recalc（修 A5：换客户旧客户也要刷新）
         new_cid = payload.get('customer_id', old_cid)
         for cid in {old_cid, new_cid}:
@@ -1667,7 +2125,7 @@ def update_order(order_id: int, data: dict) -> bool:
 
     # P19-F10：订单更新可能带来 auto-discover 新值，失效缓存
     _invalidate_choices_cache()
-    return True
+    return (True, '')
 
 
 def recompute_order(order_id: int) -> bool:
@@ -1696,6 +2154,7 @@ def recompute_order(order_id: int) -> bool:
         derived = {
             'ddl_status': data.get('ddl_status'),
             'income': float(data.get('income') or 0),
+            'discounted_income': float(data.get('discounted_income') or 0),  # Spec19：折后随财务管线重算
             'platform_fee': float(data.get('platform_fee') or 0),
             'actual_received': float(data.get('actual_received') or 0),
             'updated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
@@ -1756,6 +2215,133 @@ def _cleanup_unused_color_settings(conn, deleted_row) -> None:
             color_key = f'{prefix}{value}'
             conn.execute("DELETE FROM settings WHERE key = ?", (color_key,))
             logger.info('字段 %s 值「%s」已无订单使用，自动清理颜色配置 %s', field, value, color_key)
+
+
+# ── Spec 26 分期收款流水（order_payments CRUD + 收齐自动结算，路由归 task-108）──
+
+def list_payments(order_id: int, conn=None) -> list[dict]:
+    """收款流水列表（到账日升序，同日按录入顺序）。"""
+    c, close = _metric_conn(conn)
+    rows = c.execute(
+        "SELECT id, order_id, paid_at, amount, note, created_at "
+        "FROM order_payments WHERE order_id = ? ORDER BY paid_at ASC, id ASC",
+        (order_id,)
+    ).fetchall()
+    if close:
+        c.close()
+    return [dict(r) for r in rows]
+
+
+def get_received_amount(order_id: int, conn=None) -> float:
+    """已到账合计（Σ笔，round 2；详情页待收 = actual_received − 本值）。"""
+    c, close = _metric_conn(conn)
+    row = c.execute(
+        "SELECT COALESCE(SUM(amount), 0) FROM order_payments WHERE order_id = ?",
+        (order_id,)
+    ).fetchone()
+    if close:
+        c.close()
+    return round(row[0], 2)
+
+
+def _payment_write_ctx(conn):
+    """内部：收款写操作事务上下文 —— 传入连接则复用（不 commit/close），否则自开。"""
+    return nullcontext(conn) if conn is not None else transaction()
+
+
+def _settle_if_received_full(order: dict, received: float, conn) -> bool:
+    """收齐自动结算（spec §3.4 状态机）：Σ笔 ≥ actual_received−ε 且当前'未收款'
+    → 经 update_order 置'已结算'（payment_status ∈ _DDL_TRIGGER_FIELDS，内部走
+    _auto_calc_ddl_status 唯一归档入口 + recalc_customer_stats，不重复算客户）。
+    他态不自动改写 —— 只进不退（D4）。order 为写流水前读取的订单快照
+    （payment_status 判定用旧值）。返回是否触发了结算。
+    """
+    target = float(order.get('actual_received') or 0)
+    if order.get('payment_status') == '未收款' and received >= target - PAYMENT_EPSILON:
+        update_order(order['id'], {'payment_status': '已结算'}, conn=conn)
+        return True
+    return False
+
+
+def add_payment(order_id: int, data: dict, conn=None) -> tuple:
+    """新增一笔收款（Spec 26 §3.4 单事务状态机）。
+
+    流程：订单存在 → 笔数 ≤ MAX_PAYMENTS_PER_ORDER → 模拟 Σ笔 ≤
+    discounted_income+ε（先校验后写，with 内 return 不留半成品提交）→
+    INSERT 流水 → 收齐判定（_settle_if_received_full）。返回 (True, 消息) /
+    (False, 原因)。字段完整性校验在路由层 PaymentRecord（task-108）。
+    """
+    with _payment_write_ctx(conn) as c:
+        order = get_order(order_id, conn=c)
+        if not order:
+            return (False, '订单不存在')
+        cnt = c.execute(
+            "SELECT COUNT(*) FROM order_payments WHERE order_id = ?", (order_id,)
+        ).fetchone()[0]
+        if cnt >= MAX_PAYMENTS_PER_ORDER:
+            return (False, f'单笔订单收款记录最多 {MAX_PAYMENTS_PER_ORDER} 笔')
+        try:
+            amount = round(float(data.get('amount') or 0), 2)
+        except (TypeError, ValueError):
+            return (False, '收款金额无效')
+        if not amount >= 0:  # 负值/NaN 落入 False 分支（not (NaN >= 0) 为 True）
+            return (False, '收款金额无效')
+        new_total = round(get_received_amount(order_id, conn=c) + amount, 2)
+        cap = float(order.get('discounted_income') or 0)
+        if new_total > cap + PAYMENT_EPSILON:
+            return (False, f'累计收款将达 {new_total:.2f}，超过折后应收 {cap:.2f}')
+        c.execute(
+            "INSERT INTO order_payments (order_id, paid_at, amount, note) VALUES (?, ?, ?, ?)",
+            (order_id, data.get('paid_at'), amount, data.get('note')))
+        settled = _settle_if_received_full(order, new_total, c)
+    return (True, '已收齐，自动结算' if settled else '')
+
+
+def update_payment(payment_id: int, data: dict, conn=None) -> tuple:
+    """修改一笔收款（同 add_payment 事务模型：先校验模拟 Σ → UPDATE → 收齐判定）。"""
+    with _payment_write_ctx(conn) as c:
+        row = c.execute(
+            "SELECT * FROM order_payments WHERE id = ?", (payment_id,)
+        ).fetchone()
+        if not row:
+            return (False, '收款记录不存在')
+        order = get_order(row['order_id'], conn=c)
+        if not order:
+            return (False, '订单不存在')
+        if 'amount' in data:
+            try:
+                new_amount = round(float(data['amount'] or 0), 2)
+            except (TypeError, ValueError):
+                return (False, '收款金额无效')
+            if not new_amount >= 0:
+                return (False, '收款金额无效')
+        else:
+            new_amount = round(float(row['amount']), 2)
+        # 模拟 Σ：其余笔合计 + 新本笔（替换口径）
+        others = round(get_received_amount(row['order_id'], conn=c) - float(row['amount']), 2)
+        new_total = round(others + new_amount, 2)
+        cap = float(order.get('discounted_income') or 0)
+        if new_total > cap + PAYMENT_EPSILON:
+            return (False, f'累计收款将达 {new_total:.2f}，超过折后应收 {cap:.2f}')
+        c.execute(
+            "UPDATE order_payments SET paid_at = ?, amount = ?, note = ? WHERE id = ?",
+            (data.get('paid_at', row['paid_at']), new_amount,
+             data.get('note', row['note']), payment_id))
+        settled = _settle_if_received_full(order, new_total, c)
+    return (True, '已收齐，自动结算' if settled else '')
+
+
+def delete_payment(payment_id: int, conn=None) -> tuple:
+    """删除一笔收款（D4 只进不退：不回退 payment_status、不撤销归档；
+    Σ笔与状态的不一致由详情页提示兜底，阶段 3 实现）。"""
+    with _payment_write_ctx(conn) as c:
+        row = c.execute(
+            "SELECT id FROM order_payments WHERE id = ?", (payment_id,)
+        ).fetchone()
+        if not row:
+            return (False, '收款记录不存在')
+        c.execute("DELETE FROM order_payments WHERE id = ?", (payment_id,))
+    return (True, '')
 
 
 # ═══════════════════════════════════════════════════════════
@@ -2268,6 +2854,31 @@ def _calendar_filter_sql(filters: dict | None) -> tuple:
     return where, params
 
 
+def _contrast_text_color(bg_hex: str) -> str:
+    """根据背景色 hex 返回对比文字色（WCAG 相对亮度公式）。
+
+    亮底 → '#1a1a1a'（深色字），暗底 → '#fff'（白色字）。
+    解析失败兑底返回 '#1a1a1a'。Spec 28 D4。
+    """
+    try:
+        h = bg_hex.lstrip('#')
+        if len(h) != 6:
+            return '#1a1a1a'
+        r, g, b = int(h[:2], 16) / 255, int(h[2:4], 16) / 255, int(h[4:6], 16) / 255
+        # sRGB → 线性（gamma 2.2 近似）
+        r_lin = r ** 2.2
+        g_lin = g ** 2.2
+        b_lin = b ** 2.2
+        # 相对亮度
+        lum = 0.2126 * r_lin + 0.7152 * g_lin + 0.0722 * b_lin
+        # 白/黑对比度比值
+        contrast_white = (1.0 + 0.05) / (lum + 0.05)
+        contrast_black = (lum + 0.05) / (0.0 + 0.05)
+        return '#fff' if contrast_white >= contrast_black else '#1a1a1a'
+    except (ValueError, TypeError):
+        return '#1a1a1a'
+
+
 def get_orders_for_calendar(color_mode: str = 'source', filters: dict | None = None,
                             show_archived: bool = False) -> list[dict]:
     """有日期的订单，返回 FullCalendar 事件格式。
@@ -2320,7 +2931,7 @@ def get_orders_for_calendar(color_mode: str = 'source', filters: dict | None = N
             'start': r['scheduled_start'],
             'end': end,
             'backgroundColor': color,
-            'textColor': '#fff',
+            'textColor': _contrast_text_color(color),
             'borderColor': color,
             'extendedProps': {
                 'customer_name': r['customer_name'],
@@ -2391,6 +3002,26 @@ def get_all_orders() -> list[dict]:
     result = _apply_repeat_for_rows([dict(r) for r in rows], conn=conn)
     conn.close()
     return result
+
+
+def list_feed_orders() -> list[dict]:
+    """Spec20 日历订阅：未归档订单（含客户名），供 _build_ics() 生成 VEVENT。
+
+    D6 口径：仅 is_archived=0；归档/删除 → 自动从订阅消失。
+    不做 DDL 刷新/复购计算等读时加工——feed 只需库内原值。
+    """
+    conn = get_db()
+    rows = conn.execute("""
+        SELECT o.id, o.project_name, o.source, o.current_stage, o.actual_received,
+               o.scheduled_start, o.scheduled_end, o.page_deadline,
+               o.notes, o.updated_at, c.name AS customer_name
+        FROM orders o
+        LEFT JOIN customers c ON o.customer_id = c.id
+        WHERE o.is_archived = 0
+        ORDER BY o.id ASC
+    """).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
 
 
 def list_gallery_page(filters: dict | None = None, offset: int = 0, limit: int = 24) -> tuple[list[dict], int]:
@@ -2739,17 +3370,19 @@ def metric_active_count(start=None, end=None, conn=None) -> int:
 
 
 def metric_realized_income(start=None, end=None, conn=None) -> float:
-    """已实现收入（统一口径，按排期月份归属）。
-    过滤：is_archived=1 且 终态=完成（非退单）；
-    时间归属：scheduled_end ∈ [start,end]（None=不限）；
-    金额：SUM(actual_received)（净额）。含退单：否。
+    """本期到账（已到账口径，Spec 26）。
+    simple 段：已归档+完成单虚拟事件，scheduled_end∈范围（过滤逐字沿用改造前）；
+    installment 段：每笔收款 paid_at∈范围求和，不以整单状态为前提。
+    时间归属：ev_date ∈ [start,end]（None=不限）；金额：SUM(ev_amount)。含退单：
+    simple 段否（完成单限定）；installment 段退单已到账笔计入（spec §3.3）。
     """
     c, close = _metric_conn(conn)
     params: list = []
-    in_range = _in_range_sql('scheduled_end', start, end, params)
+    in_range = _in_range_sql('ev_date', start, end, params)
     row = c.execute(
-        f"SELECT COALESCE(SUM(actual_received), 0) FROM orders "
-        f"WHERE is_archived = 1 AND current_stage = ? AND {in_range}",
+        f"SELECT COALESCE(SUM(ev_amount), 0) "
+        f"FROM ({_payment_events_sql(simple_extra=' AND is_archived = 1 AND current_stage = ?')}) "
+        f"WHERE {in_range}",
         [get_done_stage()] + params
     ).fetchone()
     if close:
@@ -2772,16 +3405,21 @@ def metric_completed_count(start=None, end=None, conn=None) -> int:
 
 
 def metric_expected_income(start=None, end=None, conn=None) -> float:
-    """预计收入。
+    """预计收入（Spec 26 D6 后半：待收口径）。
     过滤：is_archived=0 且 非终态 且 排期与 [start,end] 有交集；
-    金额：SUM(actual_received)（净额；统一前看板月度预计图用毛额 income）。含退单：否。
+    金额：simple 活跃单贡献 actual_received（净额，等价原口径）；
+    installment 活跃单贡献 actual_received − Σ已到账（相关子查询，下限 0）。
+    含退单：否。
     """
     c, close = _metric_conn(conn)
     params: list = []
     overlap = _sched_overlap_sql(start, end, params)
     terminal = tuple(get_terminal_stages())
     row = c.execute(
-        f"SELECT COALESCE(SUM(actual_received), 0) FROM orders WHERE is_archived = 0 "
+        f"SELECT COALESCE(SUM(CASE WHEN COALESCE(payment_mode, 'simple') = 'installment' "
+        f"THEN MAX(actual_received - COALESCE((SELECT SUM(amount) FROM order_payments "
+        f"WHERE order_id = orders.id), 0), 0) ELSE actual_received END), 0) "
+        f"FROM orders WHERE is_archived = 0 "
         f"AND current_stage NOT IN ({','.join('?' * len(terminal))}) AND {overlap}",
         list(terminal) + params
     ).fetchone()
@@ -2938,16 +3576,23 @@ def get_stats_detail(metric: str, start_date: str = None, end_date: str = None, 
 
     主页小票（与 get_dashboard_stats 同源）：
         active     — is_archived=0 + 非终态 + 排期与范围有交集（date_expr=scheduled_start）
-        expected   — 同 active（金额取 actual_received 净额）
-        income     — is_archived=1 + 终态=完成（非退单）+ scheduled_end 落范围（按排期月）
-        completed  — 同 income（count）
+        expected   — 同 active；金额待收口径（Spec 26 D6 后半，与
+                     metric_expected_income 同源：simple=净额；installment=
+                     净额−Σ已到账下限 0）；附 net_amount（应收净额）/
+                     received_amount（已到账）/payment_mode 三列供小票按单展示
+        income     — 收款事件流（Spec 26，与 metric_realized_income 同源成对）：
+                      simple=已归档完成单虚拟事件；installment=每笔收款一行
+                      （附 payment_mode 供小票按笔标记分期，task-110）
+        completed  — 同改造前 income 口径（工作口径，Spec 26 明确不动）
         overdue    — 活跃 + 非终态 + scheduled_end<today（与 _overdue_where 同源，全时间口径）
     图表小票（与 get_monthly_income_stats / get_monthly_projected_stats 同源）：
-        monthly_income    — 指定年月的已结算订单实收明细（按 scheduled_end 归属月）
+        monthly_income    — 指定年月的已到账明细（事件流，同月度收入图口径；
+                            附 payment_mode 供小票按笔标记分期）
         monthly_projected — 指定年月的进行中订单预计净额明细
 
     参数：metric + 范围（主页 active/income/overdue/completed/expected 用 start_date/end_date；图表 monthly_income/monthly_projected 用 year/month）。
-    返回 {'items': [{id, date, project_name, amount}], 'total': 金额合计, 'count': 单数}。
+    返回 {'items': [{id, date, project_name, amount}], 'total': 金额合计, 'count': 单数}
+    （expected 与事件流 metric 的 items 附 payment_mode 等扩展键；total 恒为 amount 列合计）。
     """
     stage_done = get_done_stage()  # P19-F2
     stage_cancelled = get_refund_stage()
@@ -2956,6 +3601,8 @@ def get_stats_detail(metric: str, start_date: str = None, end_date: str = None, 
 
     conn = get_db()
     where, date_expr, amount_expr, params = '', '', 'actual_received', []
+    from_expr = 'orders'  # Spec 26：income/monthly_income 分支改事件流子查询
+    extra_cols = ''  # Spec 26 task-110：分支扩展列（expected 三数 / 事件流 mode）
     order = 'date ASC'
 
     if metric in ('active', 'expected'):
@@ -2970,8 +3617,37 @@ def get_stats_detail(metric: str, start_date: str = None, end_date: str = None, 
             params.append(end_date)
         where = ' AND '.join(conds)
         date_expr = "COALESCE(scheduled_start, substr(updated_at, 1, 10))"
-    elif metric in ('income', 'completed'):
-        # 统一口径：已归档 且 终态=完成（非退单）且 scheduled_end 落范围
+        if metric == 'expected':
+            # Spec 26 D6 后半（task-110 收口）：待收口径，与 metric_expected_income
+            # 同一表达式（卡片数=小票 total 同源）；三数列供小票按单展示
+            amount_expr = ("CASE WHEN COALESCE(payment_mode, 'simple') = 'installment' "
+                           "THEN MAX(actual_received - COALESCE((SELECT SUM(amount) FROM order_payments "
+                           "WHERE order_id = orders.id), 0), 0) ELSE actual_received END")
+            extra_cols = (", COALESCE(actual_received, 0) AS net_amount"
+                          ", COALESCE((SELECT SUM(amount) FROM order_payments "
+                          "WHERE order_id = orders.id), 0) AS received_amount"
+                          ", COALESCE(payment_mode, 'simple') AS payment_mode")
+    elif metric == 'income':
+        # 本期到账明细（事件流，Spec 26，与 metric_realized_income 同源成对）：
+        # simple=已归档完成单虚拟事件（过滤逐字沿用）；installment=每笔收款一行
+        conds = ["ev_date IS NOT NULL"]
+        params = [stage_done]
+        if start_date:
+            conds.append("ev_date >= ?")
+            params.append(start_date)
+        if end_date:
+            end_d = _safe_iso(end_date)  # P19-F6 容错：非法日期跳过上限
+            if end_d:
+                re_next = (end_d + timedelta(days=1)).isoformat()
+                conds.append("ev_date < ?")
+                params.append(re_next)
+        where = ' AND '.join(conds)
+        date_expr = "ev_date"
+        amount_expr = 'ev_amount'
+        from_expr = f"({_payment_events_sql(simple_extra=' AND is_archived = 1 AND current_stage = ?', with_order_info=True)})"
+        extra_cols = ', ev_mode AS payment_mode'  # task-110：小票按笔标记分期
+    elif metric == 'completed':
+        # 完成单数明细（工作口径，Spec 26 明确不动）：已归档+完成单按 scheduled_end 落范围
         conds = ["is_archived = 1", "scheduled_end IS NOT NULL", "current_stage = ?"]
         params = [stage_done]
         if start_date:
@@ -2990,16 +3666,19 @@ def get_stats_detail(metric: str, start_date: str = None, end_date: str = None, 
         where, params = _overdue_where()
         date_expr = "scheduled_end"
     elif metric == 'monthly_income':
-        # 图表小票：指定月份的已结算订单实收明细（按 scheduled_end 归属）
+        # 图表小票：指定年月的已到账明细（事件流，Spec 26，与月度收入图同源）
         paid_sql, paid_params = _paid_status_sql()
         month_str = month or str(today_d.month)
         m = int(month_str) if str(month_str).isdigit() else today_d.month
         y = year or today_d.year
         m_start = date(y, m, 1).isoformat()
         m_end = date(y + (1 if m == 12 else 0), (m % 12) + 1, 1).isoformat()
-        where = f"scheduled_end IS NOT NULL AND scheduled_end >= ? AND scheduled_end < ? AND {paid_sql}"
-        params = [m_start, m_end] + paid_params
-        date_expr = "scheduled_end"
+        where = "ev_date IS NOT NULL AND ev_date >= ? AND ev_date < ?"
+        params = paid_params + [m_start, m_end]  # 子查询内 IN (?) 占位符先出现，月界在后
+        date_expr = "ev_date"
+        amount_expr = 'ev_amount'
+        from_expr = f"({_payment_events_sql(simple_extra=f' AND {paid_sql}', with_order_info=True)})"
+        extra_cols = ', ev_mode AS payment_mode'  # task-110：小票按笔标记分期
     elif metric == 'monthly_projected':
         # 图表小票：指定月份的进行中订单预计收入明细
         month_str = month or str(today_d.month)
@@ -3018,8 +3697,8 @@ def get_stats_detail(metric: str, start_date: str = None, end_date: str = None, 
     rows = conn.execute(
         f"""SELECT id, project_name,
                    {date_expr} AS date,
-                   COALESCE({amount_expr}, 0) AS amount
-            FROM orders WHERE {where}
+                   COALESCE({amount_expr}, 0) AS amount{extra_cols}
+            FROM {from_expr} WHERE {where}
             ORDER BY {order}, id ASC""",
         params
     ).fetchall()
@@ -3063,6 +3742,7 @@ def get_available_years() -> list[int]:
         "SELECT DISTINCT CAST(strftime('%Y', created_at) AS INTEGER) as y FROM orders "
         "UNION SELECT DISTINCT CAST(strftime('%Y', completed_at) AS INTEGER) FROM orders WHERE completed_at IS NOT NULL "
         "UNION SELECT DISTINCT CAST(strftime('%Y', scheduled_end) AS INTEGER) FROM orders WHERE scheduled_end IS NOT NULL "
+        "UNION SELECT DISTINCT CAST(strftime('%Y', paid_at) AS INTEGER) FROM order_payments "
         "ORDER BY y DESC"
     ).fetchall()
     conn.close()
@@ -3078,22 +3758,61 @@ def get_available_years() -> list[int]:
     return full_range
 
 
+def _payment_events_sql(simple_extra: str = '', installment_extra: str = '',
+                        with_order_info: bool = False) -> str:
+    """收款事件流子查询构建器（Spec 26 §3.1 现金口径统一数据源）。
+
+    - simple 段：虚拟事件（ev_date=scheduled_end, ev_amount=actual_received），
+      附加过滤由调用方以改造前逐字条件传入（等价性由 task-103 基线对拍证明）；
+    - installment 段：真实事件（ev_date=paid_at, ev_amount=amount）到账即计，
+      不含整单 payment_status 过滤（spec §3.3：退单分期单已到账笔计入月度图）。
+
+    simple_extra / installment_extra：以 " AND ..." 形式拼接的附加 WHERE 段
+    （占位符参数由调用方按 SQL 拼接顺序提供）；外层对 ev_date 统一做范围过滤。
+    with_order_info：额外输出 id / project_name（小票明细用；installment 段
+    同单多笔收款产出多行，每笔一行，id 重复为预期语义）。
+    输出恒含 ev_mode（'simple'/'installment' 常量列；Spec 26 task-110 小票按笔
+    标记分期用；聚合调用方不取该列，无影响）。
+    """
+    info_simple = 'id, project_name, ' if with_order_info else ''
+    info_inst = 'o.id, o.project_name, ' if with_order_info else ''
+    return f"""SELECT {info_simple}scheduled_end AS ev_date, actual_received AS ev_amount,
+               'simple' AS ev_mode
+               FROM orders
+               WHERE payment_mode = 'simple'{simple_extra}
+               UNION ALL
+               SELECT {info_inst}p.paid_at AS ev_date, p.amount AS ev_amount,
+               'installment' AS ev_mode
+               FROM order_payments p JOIN orders o ON p.order_id = o.id
+               WHERE o.payment_mode = 'installment'{installment_extra}"""
+
+
+def _payment_events_monthly_rows(conn, year: int) -> list:
+    """事件流按月求和行（月度收入/年累进两图共用）。
+
+    simple 段过滤逐字沿用改造前 WHERE（payment_status IN PAID_STATUSES +
+    scheduled_end 归月；scheduled_end IS NOT NULL 由外层范围比较自然排除
+    NULL 行，语义等价）；installment 段每笔按 paid_at 归月。
+    """
+    paid_sql, paid_params = _paid_status_sql()
+    return conn.execute(
+        f"""SELECT CAST(strftime('%m', ev_date) AS INTEGER) as m,
+                   COALESCE(SUM(ev_amount), 0) as total
+            FROM ({_payment_events_sql(simple_extra=f" AND {paid_sql}")})
+            WHERE ev_date >= ? AND ev_date < ?
+            GROUP BY m ORDER BY m""",
+        (*paid_params, f"{year}-01-01", f"{year + 1}-01-01")
+    ).fetchall()
+
+
 def get_monthly_income_stats(year: int = None, months: int = 12) -> list[dict]:
-    """月度收入统计（已结算订单实收）— 按排期时间(scheduled_end)归属月份"""
+    """月度收入统计（已到账口径，Spec 26）——
+    simple=已结算单虚拟事件按排期月；installment=每笔收款按到账月，不以整单结算为前提。
+    """
     if year is None:
         year = date.today().year
     conn = get_db()
-    paid_sql, paid_params = _paid_status_sql()
-    rows = conn.execute(
-        f"""SELECT CAST(strftime('%m', scheduled_end) AS INTEGER) as m,
-                  COALESCE(SUM(actual_received), 0) as total
-           FROM orders
-           WHERE scheduled_end IS NOT NULL
-             AND scheduled_end >= ? AND scheduled_end < ?
-             AND {paid_sql}
-           GROUP BY m ORDER BY m""",
-        (f"{year}-01-01", f"{year+1}-01-01") + tuple(paid_params)
-    ).fetchall()
+    rows = _payment_events_monthly_rows(conn, year)
     result = _fill_monthly_result(rows, months, 'income')
     conn.close()
     return result
@@ -3121,21 +3840,11 @@ def get_monthly_projected_income(year: int = None, months: int = 12) -> list[dic
 
 
 def get_cumulative_annual_income(year: int = None) -> list[dict]:
-    """当年收入累进 — 按排期时间(scheduled_end)归属月份"""
+    """当年收入累进（已到账口径，Spec 26）——事件流逐月累加（口径同月度收入图）"""
     if year is None:
         year = date.today().year
     conn = get_db()
-    paid_sql, paid_params = _paid_status_sql()
-    rows = conn.execute(
-        f"""SELECT CAST(strftime('%m', scheduled_end) AS INTEGER) as m,
-                  COALESCE(SUM(actual_received), 0) as total
-           FROM orders
-           WHERE scheduled_end IS NOT NULL
-             AND scheduled_end >= ? AND scheduled_end < ?
-             AND {paid_sql}
-           GROUP BY m ORDER BY m""",
-        (f"{year}-01-01", f"{year+1}-01-01") + tuple(paid_params)
-    ).fetchall()
+    rows = _payment_events_monthly_rows(conn, year)
     cumulative = 0.0
     result = []
     row_map = {r[0]: r[1] for r in rows}
@@ -3305,13 +4014,13 @@ def get_quote_sample(commission_type: str = None) -> dict | None:
     }
 
 
-def update_order_work_hours(order_id: int, work_hours: float) -> bool:
-    """补录实际工时（补录弹窗「保存」，复用 update_order 单管线）"""
+def update_order_work_hours(order_id: int, work_hours: float) -> tuple:
+    """补录实际工时（补录弹窗「保存」，复用 update_order 单管线；透传 (ok, err)）"""
     return update_order(order_id, {'work_hours': work_hours})
 
 
-def set_order_exclude_hourly(order_id: int) -> bool:
-    """单订单排除时薪统计（补录弹窗「此单不统计」，永不再弹）"""
+def set_order_exclude_hourly(order_id: int) -> tuple:
+    """单订单排除时薪统计（补录弹窗「此单不统计」，永不再弹；透传 (ok, err)）"""
     return update_order(order_id, {'exclude_hourly': 1})
 
 
@@ -3328,11 +4037,13 @@ def create_customer(data: dict) -> int:
     conn = get_db()
     try:
         cur = conn.execute(
-            """INSERT INTO customers (name, platform_url, preferences, notes, tags)
-               VALUES (?, ?, ?, ?, ?)""",
+            """INSERT INTO customers (name, platform_url, preferences, notes, tags, is_vip, discount_pct)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
             (data['name'], data.get('platform_url', ''),
              data.get('preferences', ''), data.get('notes', ''),
-             data.get('tags', ''))
+             data.get('tags', ''),
+             int(data.get('is_vip') or 0),  # Spec19：is_vip 仅徽标语义（D6）
+             data.get('discount_pct'))  # Spec19：None = 不打折（D2）
         )
         cid = cur.lastrowid
         conn.commit()
@@ -3348,6 +4059,16 @@ def get_customer(customer_id: int) -> dict | None:
     """获取单个客户"""
     conn = get_db()
     row = conn.execute("SELECT * FROM customers WHERE id = ?", (customer_id,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def get_customer_by_platform_url(platform_url: str) -> dict | None:
+    """按平台链接精确匹配客户（稳定标识：客户改名不影响匹配，避免重复建客户）"""
+    if not platform_url:
+        return None
+    conn = get_db()
+    row = conn.execute("SELECT * FROM customers WHERE platform_url = ?", (platform_url,)).fetchone()
     conn.close()
     return dict(row) if row else None
 
@@ -3383,16 +4104,20 @@ def update_customer(customer_id: int, data: dict) -> bool:
     if not data:
         return False
     # 列名白名单，防止注入
-    valid_cols = {'name', 'platform_url', 'preferences', 'notes', 'total_spent', 'purchase_count', 'tags'}
+    valid_cols = {'name', 'platform_url', 'former_names', 'preferences', 'notes', 'total_spent', 'purchase_count', 'tags',
+                  'is_vip', 'discount_pct'}  # Spec19 VIP 折扣（D6：is_vip 仅徽标语义）
     data = {k: v for k, v in data.items() if k in valid_cols}
     if not data:
         return False
     data['updated_at'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     set_clause = ', '.join([f"{k} = ?" for k in data.keys()])
     conn = get_db()
-    conn.execute(f"UPDATE customers SET {set_clause} WHERE id = ?", list(data.values()) + [customer_id])
-    conn.commit()
-    conn.close()
+    try:
+        conn.execute(f"UPDATE customers SET {set_clause} WHERE id = ?", list(data.values()) + [customer_id])
+        conn.commit()
+    finally:
+        # UNIQUE 冲突等异常也必须关闭连接，否则泄漏连接持有写锁，阻塞后续写入
+        conn.close()
     return True
 
 
@@ -3462,6 +4187,571 @@ def recalc_customer_stats(customer_id: int, conn=None) -> None:
     if own:
         conn.commit()
         conn.close()
+
+
+# ═══════════════════════════════════════════════════════════
+# 小工具数据层（Spec 22：002 回复模板 / 003 价目表）
+# ═══════════════════════════════════════════════════════════
+
+# ── 002 回复模板（reply_templates）──
+
+def create_reply_template(group_name: str, title: str, content: str) -> int:
+    """新建回复模板，返回新记录 ID。"""
+    conn = get_db()
+    cur = conn.execute(
+        "INSERT INTO reply_templates (group_name, title, content) VALUES (?, ?, ?)",
+        ((group_name or '').strip() or '未分组', title, content)
+    )
+    tid = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return tid
+
+
+def update_reply_template(tid: int, group_name: str, title: str, content: str) -> bool:
+    """全量更新回复模板（分组/标题/内容）。"""
+    conn = get_db()
+    cur = conn.execute(
+        "UPDATE reply_templates SET group_name = ?, title = ?, content = ?, "
+        "updated_at = datetime('now','localtime') WHERE id = ?",
+        ((group_name or '').strip() or '未分组', title, content, tid)
+    )
+    conn.commit()
+    conn.close()
+    return cur.rowcount > 0
+
+
+def delete_reply_template(tid: int) -> bool:
+    conn = get_db()
+    cur = conn.execute("DELETE FROM reply_templates WHERE id = ?", (tid,))
+    conn.commit()
+    conn.close()
+    return cur.rowcount > 0
+
+
+def get_reply_template(tid: int) -> dict | None:
+    conn = get_db()
+    row = conn.execute(
+        "SELECT * FROM reply_templates WHERE id = ?", (tid,)
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def list_reply_templates(group: str | None = None) -> list[dict]:
+    """回复模板列表；group 传入则按分组过滤（「全部」由路由层不传实现）。"""
+    conn = get_db()
+    if group:
+        rows = conn.execute(
+            "SELECT * FROM reply_templates WHERE group_name = ? "
+            "ORDER BY group_name, sort_order, id",
+            (group,)
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM reply_templates ORDER BY group_name, sort_order, id"
+        ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def list_reply_groups() -> list[dict]:
+    """分组统计 [{name, count}]（「全部」/「未分组」由路由层合成）。"""
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT group_name AS name, COUNT(*) AS count FROM reply_templates "
+        "GROUP BY group_name ORDER BY group_name"
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def rename_reply_group(old_name: str, new_name: str) -> int:
+    """重命名分组（事务批量更新组内全部模板）。返回受影响条数。"""
+    with transaction() as conn:
+        cur = conn.execute(
+            "UPDATE reply_templates SET group_name = ?, updated_at = datetime('now','localtime') "
+            "WHERE group_name = ?",
+            (new_name, old_name)
+        )
+        return cur.rowcount
+
+
+def delete_reply_group(group_name: str) -> int:
+    """删除分组：组内模板归「未分组」（事务）。返回受影响条数。"""
+    with transaction() as conn:
+        cur = conn.execute(
+            "UPDATE reply_templates SET group_name = '未分组', updated_at = datetime('now','localtime') "
+            "WHERE group_name = ? AND group_name != '未分组'",
+            (group_name,)
+        )
+        return cur.rowcount
+
+
+# ── 003 价目表（pricelist_items + pricelist_images）──
+
+# 更新列白名单（T22.14：update_pricelist_item 只允许这些列）
+PRICELIST_UPDATABLE_COLUMNS = {
+    'category', 'name', 'price', 'price_max', 'unit', 'description',
+    'example_image_path', 'sort_order',
+}
+
+# 每项目例图上限（2026-08-12 UX 改造：多例图横排；2026-08-16 Spec 30 扩容 3→10）
+PRICELIST_IMAGE_LIMIT = 10
+
+
+def _pricelist_image_to_dict(row) -> dict:
+    """例图行转 dict 并派生 thumb_url/preview_url（image_path 存 preview 相对路径）。"""
+    d = dict(row)
+    path = d.get('image_path') or ''
+    if path:
+        d['preview_url'] = '/uploads/' + path
+        d['thumb_url'] = '/uploads/' + path.replace('/preview_', '/thumb_')
+    else:
+        d['preview_url'] = ''
+        d['thumb_url'] = ''
+    return d
+
+
+def _pricelist_row_to_dict(row, images: list | None = None) -> dict:
+    """项目行转 dict；images 由调用方装配，thumb/preview 取首图（列表卡兼容）。"""
+    d = dict(row)
+    imgs = images if images is not None else []
+    d['images'] = imgs
+    if imgs:
+        d['thumb_url'] = imgs[0]['thumb_url']
+        d['preview_url'] = imgs[0]['preview_url']
+    else:
+        d['thumb_url'] = ''
+        d['preview_url'] = ''
+    return d
+
+
+def create_pricelist_item(data: dict) -> int:
+    """新建价目表项目，返回新记录 ID。"""
+    conn = get_db()
+    cur = conn.execute(
+        "INSERT INTO pricelist_items (category, name, price, price_max, unit, description) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (data.get('category', '默认'), data['name'], data.get('price', 0),
+         data.get('price_max'), data.get('unit', ''), data.get('description', ''))
+    )
+    iid = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return iid
+
+
+def update_pricelist_item(iid: int, data: dict) -> bool:
+    """按列白名单更新价目表项目。"""
+    sets = []
+    params = []
+    for k, v in data.items():
+        if k in PRICELIST_UPDATABLE_COLUMNS:
+            sets.append(f"{k} = ?")
+            params.append(v)
+    if not sets:
+        return False
+    conn = get_db()
+    cur = conn.execute(
+        f"UPDATE pricelist_items SET {', '.join(sets)}, "
+        "updated_at = datetime('now','localtime') WHERE id = ?",
+        (*params, iid)
+    )
+    conn.commit()
+    conn.close()
+    return cur.rowcount > 0
+
+
+def get_pricelist_item(iid: int) -> dict | None:
+    conn = get_db()
+    row = conn.execute(
+        "SELECT * FROM pricelist_items WHERE id = ?", (iid,)
+    ).fetchone()
+    if not row:
+        conn.close()
+        return None
+    img_rows = conn.execute(
+        "SELECT * FROM pricelist_images WHERE item_id = ? ORDER BY sort_order, id", (iid,)
+    ).fetchall()
+    conn.close()
+    return _pricelist_row_to_dict(row, [_pricelist_image_to_dict(r) for r in img_rows])
+
+
+def list_pricelist_items() -> list[dict]:
+    """项目列表（按分类 → 排序 → id）；例图单次查询按 item_id 分组装配（防 N+1）。"""
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT * FROM pricelist_items ORDER BY category, sort_order, id"
+    ).fetchall()
+    img_rows = conn.execute(
+        "SELECT * FROM pricelist_images ORDER BY item_id, sort_order, id"
+    ).fetchall()
+    conn.close()
+    by_item: dict[int, list] = {}
+    for r in img_rows:
+        by_item.setdefault(r['item_id'], []).append(_pricelist_image_to_dict(r))
+    return [_pricelist_row_to_dict(r, by_item.get(r['id'], [])) for r in rows]
+
+
+_PRICELIST_CATEGORY_ORDER_KEY = 'pricelist_category_order'
+
+
+def get_pricelist_category_order() -> list:
+    """价目表分类显示顺序（settings 表逗号分隔序列）。
+    空库 / 缺失 / 空串 → 返回 []；未列入的新分类由调用方追加末尾。
+    """
+    raw = get_all_settings().get(_PRICELIST_CATEGORY_ORDER_KEY, '')
+    if not raw:
+        return []
+    return [c for c in raw.split(',') if c]
+
+
+def set_pricelist_category_order(categories: list) -> None:
+    """写入价目表分类显示顺序（逗号分隔序列到 settings 表）。"""
+    val = ','.join(str(c) for c in categories)
+    update_settings({_PRICELIST_CATEGORY_ORDER_KEY: val})
+
+
+def delete_pricelist_item(iid: int) -> dict | None:
+    """删除价目表项目，返回被删行（含 example_image_path，供调用方清理 uploads）。"""
+    conn = get_db()
+    row = conn.execute(
+        "SELECT * FROM pricelist_items WHERE id = ?", (iid,)
+    ).fetchone()
+    if not row:
+        conn.close()
+        return None
+    conn.execute("DELETE FROM pricelist_items WHERE id = ?", (iid,))
+    conn.commit()
+    conn.close()
+    return dict(row)
+
+
+def reorder_pricelist(ids: list[int]) -> None:
+    """拖拽排序：事务内按数组顺序写 sort_order（同分类内排序）。"""
+    if not ids:
+        return
+    with transaction() as conn:
+        for idx, iid in enumerate(ids):
+            conn.execute(
+                "UPDATE pricelist_items SET sort_order = ? WHERE id = ?",
+                (idx, iid)
+            )
+
+
+# ── 价目表例图（pricelist_images：每项目最多 PRICELIST_IMAGE_LIMIT 张）──
+
+def get_pricelist_images(item_id: int) -> list[dict]:
+    """项目全部例图，按 sort_order/id 升序。"""
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT * FROM pricelist_images WHERE item_id = ? ORDER BY sort_order, id",
+        (item_id,)).fetchall()
+    conn.close()
+    return [_pricelist_image_to_dict(r) for r in rows]
+
+
+def count_pricelist_images(item_id: int) -> int:
+    conn = get_db()
+    n = conn.execute(
+        "SELECT COUNT(*) FROM pricelist_images WHERE item_id = ?", (item_id,)
+    ).fetchone()[0]
+    conn.close()
+    return n
+
+
+def add_pricelist_image(item_id: int, image_path: str) -> int:
+    """追加例图记录，sort_order 取当前最大值+1，返回新记录 id。"""
+    conn = get_db()
+    row = conn.execute(
+        "SELECT COALESCE(MAX(sort_order), -1) + 1 AS next FROM pricelist_images WHERE item_id = ?",
+        (item_id,)).fetchone()
+    next_sort = row['next'] if row else 0
+    cur = conn.execute(
+        "INSERT INTO pricelist_images (item_id, image_path, sort_order) VALUES (?, ?, ?)",
+        (item_id, image_path, next_sort))
+    conn.commit()
+    image_id = cur.lastrowid
+    conn.close()
+    return image_id
+
+
+def get_pricelist_image(image_id: int) -> dict | None:
+    """按 id 取单条例图记录（含派生 URL）。"""
+    conn = get_db()
+    row = conn.execute(
+        "SELECT * FROM pricelist_images WHERE id = ?", (image_id,)
+    ).fetchone()
+    conn.close()
+    return _pricelist_image_to_dict(row) if row else None
+
+
+def delete_pricelist_image(image_id: int) -> dict | None:
+    """删除例图记录，返回被删行（含 item_id/image_path，供调用方清理文件）。"""
+    conn = get_db()
+    row = conn.execute(
+        "SELECT * FROM pricelist_images WHERE id = ?", (image_id,)
+    ).fetchone()
+    if not row:
+        conn.close()
+        return None
+    conn.execute("DELETE FROM pricelist_images WHERE id = ?", (image_id,))
+    conn.commit()
+    conn.close()
+    return dict(row)
+
+
+def reorder_pricelist_images(ids: list[int]) -> None:
+    """例图拖拽排序：事务内按数组顺序写 sort_order（同项目内排序）。"""
+    if not ids:
+        return
+    with transaction() as conn:
+        for idx, img_id in enumerate(ids):
+            conn.execute(
+                "UPDATE pricelist_images SET sort_order = ? WHERE id = ?",
+                (idx, img_id)
+            )
+
+
+def get_pricelist_meta() -> dict:
+    """价目表菜单元信息 {title, note}（settings 键 pricelist_meta，JSON 存储）。"""
+    raw = get_all_settings().get('pricelist_meta', '')
+    try:
+        meta = json.loads(raw) if raw else {}
+    except (TypeError, ValueError):
+        logging.warning('pricelist_meta JSON 损坏，回退空值: %r', raw)
+        meta = {}
+    if not isinstance(meta, dict):
+        meta = {}
+    return {'title': meta.get('title', ''), 'note': meta.get('note', '')}
+
+
+# ═══════════════════════════════════════════════════════════
+# Spec 23 小票打印机（草稿 / 模板 / 计算）
+# ═══════════════════════════════════════════════════════════
+
+# 草稿默认结构：meta 含 order_id 预留位（§3.9 订单快照挂载点，不消费）
+DEFAULT_RECEIPT_META = {
+    'shop_name': '', 'subtitle': '', 'order_no': '', 'order_date': '',
+    'contact': '', 'footer': '感谢惠顾', 'multiplier': 1,
+    # 2026-08-13 用户需求 2b：整单倍率行文案（mult_expr 的 {n} 为数值占位符）
+    'mult_label': '倍率', 'mult_expr': '×{n}',
+    'discount_type': 'none', 'discount_value': 0,  # Spec 24：双形态（amount 金额 / rate 中文折数）
+    'deposit': 0, 'order_id': None,
+}
+
+# Spec 24：单品倍率快捷预设默认值（编辑页可增删改名改值）
+DEFAULT_RECEIPT_MULT_PRESETS = [
+    {'label': '商用', 'value': 2},
+    {'label': '买断', 'value': 3},
+]
+DEFAULT_RECEIPT_STYLE = {
+    'preset': 'list', 'paper': '#fdfcf8', 'ink': '#1a1a1a',
+    'bg_path': '', 'image_path': '', 'image_mode': 'dither',
+    # 2026-08-13 用户需求 3：footer 插图（总计与感谢语之间）
+    'footer_image_path': '', 'footer_image_mode': 'color',
+    'barcode': True, 'zigzag': True,
+}
+
+
+def default_receipt_draft() -> dict:
+    """从未保存过的默认草稿：1 空行 + 默认 meta/style。"""
+    return {
+        'items': [{'name': '', 'price': 0, 'qty': 1, 'is_gift': False, 'extras': [],
+                   'multiplier': 1, 'mult_label': '', 'discount_type': 'none', 'discount_value': 0}],
+        'meta': dict(DEFAULT_RECEIPT_META),
+        'style': dict(DEFAULT_RECEIPT_STYLE),
+    }
+
+
+def get_receipt_draft() -> dict:
+    """读当前草稿：settings receipt_draft 键（meta+style）+ receipt_items 组装嵌套。
+
+    从未保存过 → 默认 1 空行草稿；已保存过空票 → items 保持 []（区分依据 settings 键是否存在）。
+    """
+    raw = get_all_settings().get('receipt_draft', '')
+    has_saved = bool(raw)
+    meta, style = dict(DEFAULT_RECEIPT_META), dict(DEFAULT_RECEIPT_STYLE)
+    if raw:
+        try:
+            saved = json.loads(raw)
+            meta.update({k: v for k, v in (saved.get('meta') or {}).items()
+                         if k in DEFAULT_RECEIPT_META})
+            style.update({k: v for k, v in (saved.get('style') or {}).items()
+                          if k in DEFAULT_RECEIPT_STYLE})
+            # Spec 24 旧数据归一：旧 discount（金额）键 → discount_type='amount' + discount_value
+            old_disc = (saved.get('meta') or {}).get('discount')
+            if old_disc and meta.get('discount_type') == 'none':
+                meta['discount_type'] = 'amount'
+                meta['discount_value'] = float(old_disc or 0)
+        except (TypeError, ValueError):
+            logging.warning('receipt_draft JSON 损坏，回退默认值: %r', raw[:120])
+    conn = get_db()
+    rows = conn.execute("SELECT * FROM receipt_items ORDER BY sort_order, id").fetchall()
+    conn.close()
+    items = []
+    mains = [r for r in rows if r['parent_id'] is None]
+    for m in mains:
+        extras = [{'name': c['name'], 'price': c['price'], 'qty': c['qty']}
+                  for c in rows if c['parent_id'] == m['id']]
+        items.append({'name': m['name'], 'price': m['price'], 'qty': m['qty'],
+                      'is_gift': bool(m['is_gift']), 'extras': extras,
+                      'multiplier': m['multiplier'], 'mult_label': m['mult_label'],
+                      'discount_type': m['discount_type'], 'discount_value': m['discount_value']})
+    if not items and not has_saved:
+        items = default_receipt_draft()['items']
+    return {'items': items, 'meta': meta, 'style': style}
+
+
+def save_receipt_draft(draft: dict) -> None:
+    """整票保存（D4）：事务内全删全插 receipt_items + settings 写 meta/style JSON。"""
+    with transaction() as conn:
+        conn.execute("DELETE FROM receipt_items")
+        for idx, item in enumerate(draft.get('items') or []):
+            cur = conn.execute(
+                "INSERT INTO receipt_items (name, price, qty, parent_id, is_gift, "
+                "multiplier, mult_label, discount_type, discount_value, sort_order) "
+                "VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)",
+                (item['name'], float(item.get('price') or 0), float(item.get('qty') or 1),
+                 1 if item.get('is_gift') else 0,
+                 float(item.get('multiplier') or 1), str(item.get('mult_label') or ''),
+                 str(item.get('discount_type') or 'none'), float(item.get('discount_value') or 0),
+                 idx))
+            pid = cur.lastrowid
+            for ex in item.get('extras') or []:
+                conn.execute(
+                    "INSERT INTO receipt_items (name, price, qty, parent_id, is_gift, sort_order) "
+                    "VALUES (?, ?, ?, ?, 0, 0)",
+                    (ex['name'], float(ex.get('price') or 0), float(ex.get('qty') or 1), pid))
+        update_settings({'receipt_draft': json.dumps(
+            {'meta': draft.get('meta') or {}, 'style': draft.get('style') or {}},
+            ensure_ascii=False)}, conn=conn)
+
+
+def calc_receipt_totals(items: list, meta: dict) -> dict:
+    """Spec 24 冻结公式（与前端 receipt.js rcCalc 同口径）。
+
+    单品小计 =（price×qty + Σextras）×单品倍率 ×单品折扣（amount 直减 / rate 中文折数/10）；
+    赠品恒 0 不参与倍率折扣；合计 → ×meta.multiplier（作用于全部制品）→ −整体折扣 → −定金。
+    返回 has_* 条件行开关。
+    """
+    total = 0.0
+    for it in items:
+        if it.get('is_gift'):
+            continue
+        subtotal = float(it.get('price') or 0) * float(it.get('qty') or 0)
+        for ex in it.get('extras') or []:
+            subtotal += float(ex.get('price') or 0) * float(ex.get('qty') or 0)
+        subtotal *= float(it.get('multiplier') or 1)
+        if it.get('discount_type') == 'amount':
+            subtotal = max(0.0, subtotal - float(it.get('discount_value') or 0))
+        elif it.get('discount_type') == 'rate':
+            subtotal *= float(it.get('discount_value') or 0) / 10
+        total += subtotal
+    multiplier = float(meta.get('multiplier') or 1)
+    disc_type = str(meta.get('discount_type') or 'none')
+    disc_value = float(meta.get('discount_value') or 0)
+    deposit = float(meta.get('deposit') or 0)
+    multed = total * multiplier
+    if disc_type == 'amount':
+        grand = multed - disc_value
+    elif disc_type == 'rate':
+        grand = multed * disc_value / 10
+    else:
+        grand = multed
+    return {'total': total, 'multed': multed, 'grand': grand,
+            'balance': grand - deposit,
+            'has_mult': multiplier != 1,
+            'has_discount': disc_value > 0 and disc_type in ('amount', 'rate'),
+            'has_deposit': deposit > 0}
+
+
+def get_receipt_mult_presets() -> list[dict]:
+    """Spec 24 单品倍率快捷预设（settings 键 receipt_mult_presets，损坏/缺失回退默认）。"""
+    raw = get_all_settings().get('receipt_mult_presets', '')
+    try:
+        data = json.loads(raw) if raw else None
+    except (TypeError, ValueError):
+        logging.warning('receipt_mult_presets JSON 损坏，回退默认: %r', raw[:120])
+        data = None
+    if not isinstance(data, list) or not data:
+        return [dict(p) for p in DEFAULT_RECEIPT_MULT_PRESETS]
+    out = []
+    for p in data:
+        if isinstance(p, dict) and str(p.get('label') or '').strip():
+            try:
+                out.append({'label': str(p['label']).strip()[:20], 'value': float(p.get('value') or 1)})
+            except (TypeError, ValueError):
+                continue
+    return out or [dict(p) for p in DEFAULT_RECEIPT_MULT_PRESETS]
+
+
+def save_receipt_mult_presets(presets: list[dict]) -> None:
+    """保存单品倍率预设列表（整体覆盖）。"""
+    update_settings({'receipt_mult_presets': json.dumps(presets or [], ensure_ascii=False)})
+
+
+def list_receipt_templates() -> list[dict]:
+    """模板列表（config_json 解析为 config 字段，损坏回退空 dict）。"""
+    conn = get_db()
+    rows = conn.execute("SELECT * FROM receipt_templates ORDER BY id DESC").fetchall()
+    conn.close()
+    out = []
+    for r in rows:
+        d = dict(r)
+        try:
+            d['config'] = json.loads(d.get('config_json') or '{}')
+        except (TypeError, ValueError):
+            logging.warning('receipt_template #%s config_json 损坏', d.get('id'))
+            d['config'] = {}
+        out.append(d)
+    return out
+
+
+def create_receipt_template(name: str, config: dict) -> int:
+    conn = get_db()
+    cur = conn.execute(
+        "INSERT INTO receipt_templates (name, config_json) VALUES (?, ?)",
+        (name, json.dumps(config, ensure_ascii=False)))
+    tid = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return tid
+
+
+def get_receipt_template(tid: int):
+    conn = get_db()
+    row = conn.execute("SELECT * FROM receipt_templates WHERE id = ?", (tid,)).fetchone()
+    conn.close()
+    if not row:
+        return None
+    d = dict(row)
+    try:
+        d['config'] = json.loads(d.get('config_json') or '{}')
+    except (TypeError, ValueError):
+        d['config'] = {}
+    return d
+
+
+def delete_receipt_template(tid: int) -> bool:
+    conn = get_db()
+    cur = conn.execute("DELETE FROM receipt_templates WHERE id = ?", (tid,))
+    conn.commit()
+    conn.close()
+    return cur.rowcount > 0
+
+
+def receipt_bg_referenced(bg_basename: str) -> bool:
+    """背景文件是否被任一模板 config_json 引用（§3.7 删前检查）。"""
+    if not bg_basename:
+        return False
+    conn = get_db()
+    row = conn.execute(
+        "SELECT COUNT(*) FROM receipt_templates WHERE config_json LIKE ?",
+        (f'%{bg_basename}%',)).fetchone()
+    conn.close()
+    return (row[0] or 0) > 0
 
 
 # ═══════════════════════════════════════════════════════════

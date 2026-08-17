@@ -1,0 +1,242 @@
+{# 回复模板主视图（Spec 22 / 任务卡 91 T22.11）：分组侧栏 + 搜索 + 卡片网格 #}
+{% extends "tools/_shell.html" %}
+
+{% block tool_actions %}
+<button type="button" class="btn btn-ghost" onclick="openCenterModal('/tools/reply-templates/groups', '管理分组')">管理分组</button>
+<button type="button" class="btn btn-primary" onclick="rt_openNew()">+ 新建模板</button>
+{% endblock %}
+
+{% block tool_content %}
+<div class="rt-toolbar">
+    <input type="search" id="rt-search" class="rt-search" placeholder="搜索标题或内容…" autocomplete="off">
+    <span class="rt-count" id="rt-count"></span>
+</div>
+<div id="rt-app" class="rt-layout">
+    {% include "tools/_reply_board.html" %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+{{ super() }}
+<style>
+    .tool-reply-templates .rt-toolbar {
+        display: flex;
+        align-items: center;
+        gap: var(--space-sm);
+        margin-bottom: var(--space-md);
+    }
+    .tool-reply-templates .rt-search {
+        width: 280px;
+        padding: 8px 12px;
+        border: 1px solid var(--color-border);
+        border-radius: var(--radius-md);
+        background: var(--color-surface);
+        color: var(--color-text);
+        font-size: 0.85rem;
+    }
+    .tool-reply-templates .rt-count {
+        font-size: 0.78rem;
+        color: var(--color-text-tertiary);
+    }
+    .tool-reply-templates .rt-layout {
+        display: grid;
+        grid-template-columns: 190px 1fr;
+        gap: var(--space-lg);
+        align-items: start;
+    }
+    .tool-reply-templates .rt-groups {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        position: sticky;
+        top: var(--space-md);
+    }
+    .tool-reply-templates .rt-group-link {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 6px;
+        padding: 7px 12px;
+        border-radius: var(--radius-sm);
+        color: var(--color-text-secondary);
+        text-decoration: none;
+        font-size: 0.84rem;
+        overflow: hidden;
+    }
+    .tool-reply-templates .rt-group-link:hover { background: var(--color-surface); color: var(--color-text); }
+    .tool-reply-templates .rt-group-link.active {
+        background: var(--color-surface);
+        color: var(--color-text);
+        font-weight: 600;
+        border: 1px solid var(--color-border);
+    }
+    .tool-reply-templates .rt-group-name {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .tool-reply-templates .rt-group-count {
+        font-size: 0.72rem;
+        color: var(--color-text-tertiary);
+        flex-shrink: 0;
+    }
+    .tool-reply-templates .rt-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+        gap: var(--space-md);
+    }
+    .tool-reply-templates .rt-card {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-xs);
+        padding: var(--space-md);
+    }
+    .tool-reply-templates .rt-card.hidden { display: none; }
+    .tool-reply-templates .rt-card-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 8px;
+    }
+    .tool-reply-templates .rt-title {
+        font-weight: 600;
+        font-size: 0.92rem;
+        color: var(--color-text);
+        min-width: 0;
+        flex: 1;
+        word-break: break-all;
+    }
+    .tool-reply-templates .rt-title mark, .tool-reply-templates .rt-preview mark {
+        background: color-mix(in srgb, var(--color-warning) 45%, transparent);
+        color: inherit;
+        border-radius: 2px;
+        padding: 0 1px;
+    }
+    .tool-reply-templates .rt-badge {
+        font-size: 0.68rem;
+        color: var(--color-text-tertiary);
+        border: 1px solid var(--color-border);
+        border-radius: 999px;
+        padding: 1px 8px;
+        flex-shrink: 0;
+        max-width: 110px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .tool-reply-templates .rt-preview {
+        font-size: 0.8rem;
+        color: var(--color-text-secondary);
+        white-space: pre-wrap;
+        word-break: break-all;
+        display: -webkit-box;
+        -webkit-line-clamp: 6;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+    }
+    .tool-reply-templates .rt-card-actions {
+        display: flex;
+        gap: 6px;
+        padding-top: var(--space-xs);
+        border-top: 1px solid var(--color-border);
+        margin-top: auto;
+    }
+    @media (max-width: 760px) {
+        .tool-reply-templates .rt-layout { grid-template-columns: 1fr; }
+        .tool-reply-templates .rt-groups { position: static; flex-direction: row; flex-wrap: wrap; }
+    }
+</style>
+<script>
+(function() {
+    // ── 新建（带当前分组预填）──
+    window.rt_openNew = function() {
+        var active = document.querySelector('.rt-group-link.active');
+        var group = active ? (active.dataset.group || '') : '';
+        if (group === '__all__') group = '';
+        var url = '/tools/reply-templates/new' + (group ? '?group=' + encodeURIComponent(group) : '');
+        openCenterModal(url, '新建回复模板');
+    };
+
+    // ── 复制（T22.12）：内容从隐藏节点 textContent 读取，全转义安全 ──
+    window.rt_copy = function(btn) {
+        var card = btn.closest('.rt-card');
+        var src = card.querySelector('.rt-src');
+        var text = src ? src.textContent : '';
+        function fallback() {
+            var ta = document.createElement('textarea');
+            ta.value = text;
+            ta.style.position = 'fixed';
+            ta.style.opacity = '0';
+            document.body.appendChild(ta);
+            ta.select();
+            var ok = false;
+            try { ok = document.execCommand('copy'); } catch (e) {}
+            document.body.removeChild(ta);
+            if (ok) showToast('已复制', 'success');
+            else showToast('复制失败，请手动选择内容复制', 'error');
+        }
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(text)
+                .then(function() { showToast('已复制', 'success'); })
+                .catch(fallback);
+        } else {
+            fallback();
+        }
+    };
+
+    // ── 搜索过滤 + 高亮（防抖 150ms；先 textContent 再构造节点，禁 innerHTML 拼接）──
+    var timer = null;
+    function highlightNode(el, text, keyword) {
+        if (!el) return;
+        el.textContent = '';
+        if (!keyword) { el.textContent = text; return; }
+        var lower = text.toLowerCase(), k = keyword.toLowerCase(), idx = 0, pos;
+        while ((pos = lower.indexOf(k, idx)) !== -1) {
+            el.appendChild(document.createTextNode(text.slice(idx, pos)));
+            var m = document.createElement('mark');
+            m.textContent = text.slice(pos, pos + k.length);
+            el.appendChild(m);
+            idx = pos + k.length;
+        }
+        el.appendChild(document.createTextNode(text.slice(idx)));
+    }
+
+    window.rt_applyFilter = function() {
+        var input = document.getElementById('rt-search');
+        var kw = input ? input.value.trim().toLowerCase() : '';
+        var cards = document.querySelectorAll('#rt-app .rt-card');
+        var visible = 0;
+        cards.forEach(function(card) {
+            var title = card.dataset.title || '';
+            var src = card.querySelector('.rt-src');
+            var content = src ? src.textContent : '';
+            var hit = !kw || title.toLowerCase().indexOf(kw) !== -1 || content.toLowerCase().indexOf(kw) !== -1;
+            card.classList.toggle('hidden', !hit);
+            if (hit) visible++;
+            highlightNode(card.querySelector('.rt-title'), title, kw);
+            highlightNode(card.querySelector('.rt-preview'), content, kw);
+        });
+        var countEl = document.getElementById('rt-count');
+        if (countEl) countEl.textContent = kw ? (visible + ' 条命中') : '';
+    };
+
+    var searchInput = document.getElementById('rt-search');
+    if (searchInput) {
+        searchInput.addEventListener('input', function() {
+            clearTimeout(timer);
+            timer = setTimeout(window.rt_applyFilter, 150);
+        });
+    }
+
+    // 写操作后 #rt-app 整区重渲染 → 重新套用当前搜索词
+    document.addEventListener('htmx:afterSettle', function(e) {
+        var t = e.detail && e.detail.target;
+        if (t && (t.id === 'rt-app' || (t.closest && t.closest('#rt-app')))) {
+            window.rt_applyFilter();
+        }
+    });
+
+    window.rt_applyFilter();
+})();
+</script>
+{% endblock %}

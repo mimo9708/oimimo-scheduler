@@ -1,0 +1,103 @@
+{# 模板管理 — 卡片网格完整页（Spec 18 / 任务卡 78，新旧并存；旧模态入口保留至卡 79） #}
+{% extends "base.html" %}
+{% block title %}模板管理 — oimimo scheduler{% endblock %}
+{% block breadcrumb_custom %}模板管理{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h1 class="page-title">模板管理</h1>
+    </div>
+    <div>
+        <a href="/templates/new" class="btn btn-primary">+ 新建模板</a>
+    </div>
+</div>
+
+{% if templates %}
+<div class="tpl-grid">
+    {% for t in templates %}
+    <div class="card tpl-card">
+        <div class="tpl-card-head">
+            <div class="tpl-card-title" title="{{ t.name|e }}">{{ t.name|e }}</div>
+            <button type="button" class="btn btn-ghost btn-sm tpl-card-use"
+                    onclick="openCenterModal('/orders/new?modal=1&template={{ t.id }}', '新建订单')"
+                    title="用此模板新建订单">用此模板新建订单</button>
+        </div>
+        <div class="tpl-card-summary">
+            {% set parts = [] %}
+            {% if t.data.source %}{% set _ = parts.append(t.data.source) %}{% endif %}
+            {% if t.data.commission_type %}{% set _ = parts.append(t.data.commission_type) %}{% endif %}
+            {% if (t.data.deposit or 0)|float + (t.data.balance or 0)|float > 0 %}
+            {% set _ = parts.append('金额 ¥%.2f' % ((t.data.deposit or 0)|float + (t.data.balance or 0)|float)) %}
+            {% endif %}
+            {{ parts | join(' · ') if parts else '（无字段快照）' }}
+        </div>
+        <div class="tpl-card-actions">
+            <a href="/templates/{{ t.id }}/edit" class="btn btn-ghost btn-sm">编辑</a>
+            <form method="post" action="/templates/{{ t.id }}/delete"
+                  onsubmit="return confirm('删除模板「{{ t.name }}」？');" style="display:inline;">
+                <button type="submit" class="btn btn-ghost btn-sm" style="color:var(--color-danger);">删除</button>
+            </form>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<div class="empty-state" style="padding:64px 16px;">
+    <div class="empty-state-icon">📋</div>
+    <div class="empty-state-text">还没有模板</div>
+    <div style="font-size:0.8rem;color:var(--color-text-tertiary);margin:6px 0 16px;">保存常用字段组合，之后可一键用模板新建订单。</div>
+    <a href="/templates/new" class="btn btn-primary">+ 新建模板</a>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<style>
+    .tpl-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+        gap: var(--space-md);
+    }
+    .tpl-card {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-xs);
+        padding: var(--space-md);
+    }
+    .tpl-card-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 8px;
+    }
+    .tpl-card-title {
+        font-weight: 600;
+        font-size: 0.95rem;
+        color: var(--color-text);
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        flex: 1;
+    }
+    .tpl-card-use {
+        flex-shrink: 0;
+        font-size: 0.72rem;
+    }
+    .tpl-card-summary {
+        font-size: 0.78rem;
+        color: var(--color-text-tertiary);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .tpl-card-actions {
+        display: flex;
+        gap: 6px;
+        padding-top: var(--space-xs);
+        border-top: 1px solid var(--color-border);
+        margin-top: auto;
+    }
+</style>
+{% endblock %}

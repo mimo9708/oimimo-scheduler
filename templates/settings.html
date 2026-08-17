@@ -1,11 +1,6 @@
 {% extends "base.html" %}
 {% block title %}设置 — oimimo scheduler{% endblock %}
 
-{% block head_extra %}
-    <!-- SortableJS（阶段流程拖拽排序） -->
-    <script src="{{ url_for('static', filename='vendor/sortable.min.js') }}"></script>
-{% endblock %}
-
 {% block content %}
 <div class="page-header">
     <div>
@@ -211,14 +206,15 @@
     <!-- ═══════════ Tab: 订单属性 ═══════════ -->
     <div id="panel-source" style="display:none;">
         <div class="card" style="margin-bottom:var(--space-md);">
-            <div class="card-header has-tip">来源管理<span class="tip-trigger">?<span class="header-tip">勾选「平台」的来源会在订单中显示手续费计算，未勾选的来源不计算手续费（直接收全款）。</span></span></div>
+            <div class="card-header has-tip">来源管理<span class="tip-trigger">?<span class="header-tip">勾选「平台」的来源会在订单中显示手续费计算，未勾选的来源不计算手续费（直接收全款）。<br>注意：费率与「平台」勾选仅对之后新建的订单生效；已有订单的手续费按下单时的快照计算，不会随设置变更而回溯。如需已有订单免手续费，请编辑该订单并将手续费率改为 0。</span></span></div>
             <div class="card-body">
                 <div style="display:grid;grid-template-columns:repeat(auto-fill, minmax(280px, 1fr));gap:var(--space-sm);">
                     {% for src in source_labels %}
                     {% set is_plat = src in platform_sources %}
                     {% set def_fee = all_settings.get('default_fee_' + src, '5') %}
-                    <div class="source-item" style="display:flex;align-items:center;gap:var(--space-sm);padding:10px 14px;border:1px solid var(--color-border);border-radius:var(--radius-sm);">
-                        <span style="flex:1;font-weight:500;min-width:60px;">{{ src }}</span>
+                    {% set src_count = source_active_counts.get(src, 0) %}
+                    <div class="source-item" data-name="{{ src }}" style="display:flex;align-items:center;gap:var(--space-sm);padding:10px 14px;border:1px solid var(--color-border);border-radius:var(--radius-sm);">
+                        <span style="flex:1;font-weight:500;min-width:60px;">{{ src }}{% if src_count > 0 %}<span style="font-size:0.7rem;color:var(--color-text-tertiary);margin-left:2px;" title="被 {{ src_count }} 个订单使用">({{ src_count }})</span>{% endif %}</span>
                         <label style="display:flex;align-items:center;gap:4px;font-size:0.78rem;cursor:pointer;white-space:nowrap;">
                             <input type="checkbox" name="platform_{{ src }}" value="{{ src }}"
                                    {% if is_plat %}checked{% endif %} onchange="toggleFeeInput(this)"
@@ -229,6 +225,7 @@
                                style="width:52px;padding:3px 5px;border:1px solid var(--color-border);border-radius:3px;font-size:0.78rem;text-align:center;{% if not is_plat %}display:none;{% endif %}"
                                class="fee-input">
                         <span style="font-size:0.72rem;color:var(--color-text-tertiary);">%</span>
+                        <button type="button" class="settings-tag-remove source-del-btn" onclick="removeSourceTag(this)" title="{% if src_count > 0 %}被 {{ src_count }} 个订单使用，删除后订单来源置空{% else %}删除{% endif %}">×</button>
                     </div>
                     {% endfor %}
                 </div>
@@ -238,8 +235,38 @@
                         <input type="text" id="new-source-name" placeholder="输入来源名称"
                                style="flex:1;padding:8px 12px;border:1px solid var(--color-border);border-radius:var(--radius-sm);font-size:0.88rem;">
                         <input type="hidden" name="source_list_input" id="source-list-hidden" value="{{ source_labels|join(',') }}">
+                        <input type="hidden" name="confirmed_source_deletes" id="confirmed-source-deletes" value="">
                         <button type="button" class="btn btn-primary btn-sm" onclick="addSource()" style="white-space:nowrap;">+ 添加</button>
                     </div>
+                </div>
+                <!-- Spec 28 phase-14（task-133）：来源合并（D10，与稿件类别合并同款 UI） -->
+                <div style="margin-top:var(--space-md);padding-top:var(--space-md);border-top:1px solid var(--color-border);">
+                    <div style="font-size:0.85rem;font-weight:600;margin-bottom:var(--space-sm);">来源合并</div>
+                    <p style="font-size:0.78rem;color:var(--color-text-secondary);margin-bottom:var(--space-sm);">选择多个含义相近的来源，合并为统一名称（自动更新所有订单、平台标记、费率与日历颜色）</p>
+                    <div id="source-merge-checkboxes" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:var(--space-sm);"></div>
+                    <div style="display:flex;gap:var(--space-sm);align-items:center;">
+                        <input type="text" id="source-merge-target" placeholder="合并后的目标名称"
+                               style="flex:1;padding:8px 12px;border:1px solid var(--color-border);border-radius:var(--radius-sm);font-size:0.88rem;">
+                        <button type="button" id="source-merge-btn" class="btn btn-sm" style="white-space:nowrap;background:var(--color-warning);color:#1a1a1a;border:none;" onclick="doMergeSources()" disabled>合并</button>{# Spec 32 卡 152：原白字琥珀底 ratio 1.67，改深字双主题均 ≥ 8 #}
+                    </div>
+                </div>
+            </div>
+        </div>
+        <!-- Spec19 VIP 折扣预设 -->
+        <div class="card" style="margin-bottom:var(--space-md);">
+            <div class="card-header has-tip">VIP 折扣预设<span class="tip-trigger">?<span class="header-tip">客户表单「默认折扣」输入框的候选值（单位 %，折后应收百分比，88 = 88 折）。每项须在 0~100 之间。新建订单选择 VIP 客户时会自动带出该客户的默认折扣。</span></span></div>
+            <div class="card-body">
+                <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:var(--space-md);" id="vip-preset-tags">
+                    {% for p in vip_discount_presets %}
+                    <span class="settings-tag vip-preset-tag" data-value="{{ p }}">{{ p }}<button type="button" class="settings-tag-remove" onclick="removeVipPreset(this)" title="删除">×</button></span>
+                    {% endfor %}
+                </div>
+                <div style="display:flex;gap:var(--space-sm);">
+                    <input type="number" id="new-vip-preset" placeholder="输入折扣值（如 88 = 88 折）" min="1" max="100" step="0.1"
+                           style="flex:1;padding:8px 12px;border:1px solid var(--color-border);border-radius:var(--radius-sm);font-size:0.88rem;"
+                           onkeydown="if(event.key==='Enter'){addVipPreset();event.preventDefault();}">
+                    <input type="hidden" name="vip_discount_presets" id="vip-preset-hidden" value="{{ vip_discount_presets|join(',') }}">
+                    <button type="button" class="btn btn-primary btn-sm" onclick="addVipPreset()" style="white-space:nowrap;">+ 添加</button>
                 </div>
             </div>
         </div>
@@ -281,7 +308,7 @@
                     <div style="display:flex;gap:var(--space-sm);align-items:center;">
                         <input type="text" id="merge-target-name" placeholder="合并后的目标名称"
                                style="flex:1;padding:8px 12px;border:1px solid var(--color-border);border-radius:var(--radius-sm);font-size:0.88rem;">
-                        <button type="button" class="btn btn-sm" style="white-space:nowrap;background:var(--color-warning);color:#fff;border:none;" onclick="doMergeCommission()">合并</button>
+                        <button type="button" class="btn btn-sm" style="white-space:nowrap;background:var(--color-warning);color:#1a1a1a;border:none;" onclick="doMergeCommission()">合并</button>{# Spec 32 卡 152：原白字琥珀底 ratio 1.67，改深字双主题均 ≥ 8 #}
                     </div>
                 </div>
             </div>
@@ -360,6 +387,8 @@
             </div>
         </div>
     </div>
+    <!-- Spec20 卡 86：日历订阅开关（卡片在系统区 form 外，状态经此 hidden 字段提交） -->
+    <input type="hidden" name="feed_enabled" id="feed-enabled-input" value="{{ all_settings.get('feed_enabled', '0') }}">
 </form>
 
 <!-- ═══════════ Tab: 系统 ═══════════ -->
@@ -385,6 +414,58 @@
             </div>
         </div>
     </div>
+    <!-- Spec20 卡 86：日历订阅（ICS feed）｜Spec 28 D7/T28.20-23：details 默认折叠，summary 内置开关（免展开切换）；步骤条 + 双版本 URL + 国内 App 指引 -->
+    <details class="card feed-card" style="margin-bottom:var(--space-md);">
+        <summary class="card-header feed-summary has-tip" style="display:flex;align-items:center;gap:6px;">
+            <span class="feed-caret" aria-hidden="true"></span>日历订阅<span class="tip-trigger">?<span class="header-tip">把排单表里的截止日期/排期同步到手机日历。开启后保存设置即生效，订阅地址复制到日历 App 即可。</span></span>
+            <!-- 开关置于 summary：input 为 interactive content，点击勾选不触发折叠（HTML 规范）；状态经 form 内 hidden 字段提交 -->
+            <span style="margin-left:auto;display:inline-flex;align-items:center;gap:6px;font-weight:normal;font-size:0.75rem;color:var(--color-text-tertiary);">
+                <input type="checkbox" id="feed-enabled-checkbox" value="1" style="width:auto;" onclick="event.stopPropagation()"
+                       onchange="document.getElementById('feed-enabled-input').value = this.checked ? '1' : '0'; if (this.checked) showToast('已开启，点击底部「保存全部」后生效', 'info');"
+                       {% if all_settings.get('feed_enabled', '0') == '1' %}checked{% endif %}>
+                启用
+            </span>
+        </summary>
+        <div class="card-body">
+            <!-- T28.21 步骤条（纯 HTML+CSS flex） -->
+            <div class="feed-steps">
+                <span class="fs-step">① 开启订阅</span><span class="fs-arrow">→</span>
+                <span class="fs-step">② 复制地址</span><span class="fs-arrow">→</span>
+                <span class="fs-step">③ 粘贴到日历 App</span><span class="fs-arrow">→</span>
+                <span class="fs-step">④ 自动同步</span>
+            </div>
+            <div style="font-size:0.75rem;color:var(--color-text-tertiary);margin-bottom:var(--space-sm);">开启后提供 ICS 订阅地址（局域网 1097 端口），点击底部「保存全部」生效。</div>
+            {% if all_settings.get('feed_token') %}
+            <div style="margin-bottom:var(--space-sm);padding:var(--space-sm);background:var(--color-bg);border-radius:var(--radius-sm);">
+                <label style="font-size:0.82rem;font-weight:600;display:block;margin-bottom:4px;">订阅地址（http）</label>
+                <div style="display:flex;gap:6px;align-items:center;">
+                    <input type="text" id="feed-url-input" value="{{ feed_url }}" readonly style="flex:1;font-size:0.78rem;font-family:monospace;padding:4px 8px;border:1px solid var(--color-border);border-radius:var(--radius-sm);background:var(--color-surface);color:var(--color-text);user-select:all;">
+                    <button type="button" class="btn btn-secondary btn-sm" onclick="copyFeedUrl()" style="white-space:nowrap;">复制</button>
+                </div>
+                <div style="font-size:0.72rem;color:var(--color-text-tertiary);margin-top:3px;">
+                    地址含访问令牌，勿外传；若显示 <code>&lt;电脑IP&gt;</code> 请手动替换为本机局域网 IP
+                </div>
+            </div>
+            <div style="margin-bottom:var(--space-sm);">
+                <button type="button" class="btn btn-secondary btn-sm" onclick="rotateFeedToken()">重新生成令牌</button>
+                <span style="font-size:0.72rem;color:var(--color-text-tertiary);margin-left:6px;">旧订阅地址会立即失效，需在日历 App 中重新添加</span>
+            </div>
+            {% else %}
+            <div style="font-size:0.78rem;color:var(--color-text-tertiary);padding:var(--space-sm);background:var(--color-bg);border-radius:var(--radius-sm);margin-bottom:var(--space-sm);">
+                尚未启用：勾选上方开关并点击「保存全部」后自动生成订阅地址。
+            </div>
+            {% endif %}
+            <div style="font-size:0.75rem;color:var(--color-text-tertiary);line-height:1.7;">
+                <div>· 苹果日历（iOS）：设置 → 日历 → 账户 → 添加账户 → 其他 → 添加已订阅日历，粘贴 http:// 地址；打开日历 App 即会拉取，最长间隔约 1 小时</div>
+                <div>· 苹果日历（Mac）：日历 App → 文件 → 新建订阅日历，粘贴 http:// 地址；右键本日历 → 显示简介 → 自动刷新可调至「每 5 分钟」，⌘R 立即刷新</div>
+                <div>· 华为/小米日历：日历 App → 设置 → 订阅日历 → 通过 URL 添加（部分机型不支持 URL 订阅）</div>
+                <div>· 日历名旁出现 ⚠ 警告图标 = 订阅地址不可达（多为电脑 IP 变化），在日历 App 中删除后重新订阅即可</div>
+                <div>· Windows 防火墙首次弹窗请选择「允许访问」，否则手机无法拉取订阅</div>
+                <div>· 开启即时生效；<b>关闭需重启应用后生效</b></div>
+                <div>· 订阅地址在局域网内可被同网段设备访问，请勿在公共 Wi-Fi 下开启</div>
+            </div>
+        </div>
+    </details>
     <!-- P22b 数据备份与恢复 -->
     <div class="card" id="backup-card" style="margin-bottom:var(--space-md);">
         <div class="card-header">数据备份与恢复<span style="font-size:0.75rem;color:var(--color-text-tertiary);font-weight:normal;margin-left:auto;">共 {{ backup_count }} 份备份</span></div>
@@ -412,6 +493,17 @@
         <div class="card-body" style="padding:0;">
             <div id="error-log-viewer" style="max-height:400px;overflow-y:auto;"></div>
             <div id="error-log-empty" class="empty-state" style="padding:var(--space-lg);"><div class="empty-state-text">暂无错误记录</div></div>
+        </div>
+    </div>
+    <!-- Spec 30 D8：图片文件维护（孤立图片清理） -->
+    <div class="card" style="margin-bottom:var(--space-md);">
+        <div class="card-header">图片文件维护</div>
+        <div class="card-body">
+            <p style="font-size:0.82rem;color:var(--color-text-secondary);margin:0 0 var(--space-sm);">扫描 uploads 目录，清理数据库中已不存在的孤立图片文件（仅删除 original_/preview_/thumb_ 命名模式的文件）。</p>
+            <div style="display:flex;align-items:center;gap:var(--space-sm);">
+                <button class="btn btn-ghost btn-sm" onclick="cleanupOrphanImages(this)">清理孤立图片文件</button>
+                <span id="cleanup-result" style="font-size:0.82rem;color:var(--color-text-secondary);"></span>
+            </div>
         </div>
     </div>
     <!-- #41 关于与更新 -->
@@ -627,6 +719,33 @@ function copyFeedbackContact(text) {
     });
 }
 
+// Spec20 卡 86：日历订阅 URL 复制与令牌旋转
+function copyFeedUrl() {
+    var input = document.getElementById('feed-url-input');
+    if (!input) return;
+    navigator.clipboard.writeText(input.value).then(function() {
+        showToast('订阅地址已复制', 'success');
+    }, function() {
+        input.select();
+        showToast('复制失败，请手动复制', 'error');
+    });
+}
+function rotateFeedToken() {
+    if (!confirm('重新生成令牌后，旧的订阅地址会立即失效，需要在日历 App 中重新添加。确定继续吗？')) return;
+    fetch('/settings/feed-token/rotate', {method: 'POST'}).then(function(r) { return r.json(); }).then(function(res) {
+        if (res.success) {
+            var input = document.getElementById('feed-url-input');
+            if (input) input.value = res.url;
+            if (typeof markDataDirty === 'function') markDataDirty();
+            showToast('令牌已更新，请重新复制订阅地址', 'success');
+        } else {
+            showToast(res.error || '令牌更新失败', 'error');
+        }
+    }).catch(function() {
+        showToast('令牌更新失败，请重试', 'error');
+    });
+}
+
 // 预设主题数据
 var PRESET_DATA = {
     {% for preset in preset_themes %}
@@ -644,6 +763,73 @@ function _contrastColor(hex) {
     var b = parseInt(hex.substr(4,2), 16);
     var lum = (0.299*r + 0.587*g + 0.114*b) / 255;
     return lum > 0.55 ? '#000' : '#fff';
+}
+
+// Spec 32 卡 149：WCAG 相对亮度（gamma 2.2 近似），与后端 app._relative_luminance 同口径；解析失败返回 null
+function _relLuminance(hex) {
+    hex = (hex || '').replace('#', '');
+    if (hex.length === 3) hex = hex.split('').map(function(c) { return c + c; }).join('');
+    if (hex.length !== 6) return null;
+    var r = parseInt(hex.substr(0,2), 16) / 255,
+        g = parseInt(hex.substr(2,2), 16) / 255,
+        b = parseInt(hex.substr(4,2), 16) / 255;
+    return 0.2126 * Math.pow(r, 2.2) + 0.7152 * Math.pow(g, 2.2) + 0.0722 * Math.pow(b, 2.2);
+}
+// Spec 32 卡 154：浅色主题下亮琥珀黄不可见（ratio≈1.8）→ 压暗为深琥珀（ratio≈5.2），
+// 与后端 theme_css 注入同口径；深浅判定用当前生效的 --color-bg（computed 兼容 hex/rgb）
+function _relLuminanceAny(colorStr) {
+    if (!colorStr) return null;
+    var s = colorStr.trim();
+    var r, g, b;
+    if (s.indexOf('rgb') === 0) {
+        var m = s.match(/rgba?\(([^)]+)\)/);
+        if (!m) return null;
+        var parts = m[1].split(',');
+        r = parseInt(parts[0], 10); g = parseInt(parts[1], 10); b = parseInt(parts[2], 10);
+    } else {
+        s = s.replace('#', '');
+        if (s.length !== 6) return null;
+        r = parseInt(s.substr(0,2), 16); g = parseInt(s.substr(2,2), 16); b = parseInt(s.substr(4,2), 16);
+    }
+    r /= 255; g /= 255; b /= 255;
+    return 0.2126 * Math.pow(r, 2.2) + 0.7152 * Math.pow(g, 2.2) + 0.0722 * Math.pow(b, 2.2);
+}
+function _warningEffective(hex) {
+    var bg = getComputedStyle(document.documentElement).getPropertyValue('--color-bg');
+    var lum = _relLuminanceAny(bg);
+    return (lum !== null && lum < 0.35) ? hex : 'color-mix(in srgb, ' + hex + ' 55%, #000)';
+}
+// Spec 32 卡 149：color-scheme 深浅判定，与后端 _is_dark_theme 同口径（theme_bg 亮度 <0.35 判深）
+function _syncColorScheme(bgHex) {
+    var lum = _relLuminance(bgHex);
+    if (lum === null) return;
+    document.documentElement.style.setProperty('color-scheme', lum < 0.35 ? 'dark' : 'light');
+}
+// Spec 32 卡 149：accent 派生变量，与后端 db._contrast_text_color 黑白二值口径对齐
+// （白字对比度 >= 黑字对比度 → #fff，否则 #1a1a1a），hover 向对比极混合 15%
+function _syncAccentDerived(accentHex) {
+    var lum = _relLuminance(accentHex);
+    if (lum === null) return;
+    var contrastWhite = 1.05 / (lum + 0.05);
+    var contrastBlack = (lum + 0.05) / 0.05;
+    var accentText = contrastWhite >= contrastBlack ? '#fff' : '#1a1a1a';
+    var root = document.documentElement;
+    root.style.setProperty('--color-accent-text', accentText);
+    root.style.setProperty('--color-accent-hover',
+        'color-mix(in srgb, ' + accentHex + ' 85%, ' + accentText + ' 15%)');
+}
+// Spec 32 卡 149：单色微调（accent/bg）同步派生变量，保持预览态与保存后一致
+function _syncDerivedForKey(name, hex) {
+    if (name === 'theme_accent') {
+        document.documentElement.style.setProperty('--color-accent', hex);
+        _syncAccentDerived(hex);
+    } else if (name === 'theme_bg') {
+        document.documentElement.style.setProperty('--color-bg', hex);
+        _syncColorScheme(hex);
+    } else if (name === 'theme_warning') {
+        // Spec 32 卡 154：单色微调同步 warning 主题派生，与后端注入一致
+        document.documentElement.style.setProperty('--color-warning', _warningEffective(hex));
+    }
 }
 
 // CSS 变量名映射
@@ -715,6 +901,12 @@ function applyPreset(presetId) {
         }
     });
 
+    // 2.5 Spec 32 卡 149：预览态补齐派生变量（对齐卡 148 后端注入：accent-text/hover + color-scheme）
+    if (preset['theme_accent']) _syncAccentDerived(preset['theme_accent']);
+    if (preset['theme_bg']) _syncColorScheme(preset['theme_bg']);
+    // Spec 32 卡 154：浅色主题下 warning 压暗（循环内已写原值，此处统一按 preset bg 覆盖，同后端口径）
+    if (preset['theme_warning']) root.style.setProperty('--color-warning', _warningEffective(preset['theme_warning']));
+
     // 3. 更新预设卡片高亮
     document.querySelectorAll('.preset-card').forEach(function(card) {
         var isActive = card.dataset.presetId === presetId;
@@ -750,6 +942,7 @@ function applyPreset(presetId) {
                 if (textInput) textInput.value = hex;
                 if (hiddenInput) hiddenInput.value = hex;  // #44：改色写回 hidden，否则「保存全部」提交旧值
                 if (hexVal) hexVal.textContent = hex;
+                if (hiddenInput) _syncDerivedForKey(hiddenInput.name, hex);  // Spec 32 卡 149
                 updateStripColors(activeMode);
             }
         });
@@ -768,6 +961,7 @@ function syncPickerText(input) {
     if (trigger) { trigger.style.background = v; trigger.dataset.hex = v; }
     if (hiddenInput) hiddenInput.value = v;  // #44：同步表单字段
     if (hexVal) hexVal.textContent = v;
+    if (hiddenInput) _syncDerivedForKey(hiddenInput.name, v);  // Spec 32 卡 149
     updateStripColors(activeMode);
 }
 
@@ -782,6 +976,7 @@ function resetPickerColor(btn, defaultHex) {
     if (textInput) textInput.value = defaultHex;
     if (hiddenInput) hiddenInput.value = defaultHex;  // #44：重置也要写回表单字段
     if (hexVal) hexVal.textContent = defaultHex;
+    if (hiddenInput) _syncDerivedForKey(hiddenInput.name, defaultHex);  // Spec 32 卡 149
     updateStripColors(activeMode);
 }
 
@@ -916,15 +1111,117 @@ function doMergeCommission() {
         }
     }).catch(function() { showToast('网络错误', 'error'); });
 }
-// 初始化合并复选框
-document.addEventListener('DOMContentLoaded', function() {
+// 初始化合并复选框（卡 156：并入末尾 window.__pageInit，由 app.js runPageInit 统一触发）
+function initCommissionMerge() {
     var tags = document.querySelectorAll('#commission-type-tags .commission-tag');
     var names = []; tags.forEach(function(t) { names.push(t.dataset.name || t.textContent.replace('×','').replace(/\(\d+\)/, '').trim()); });
     renderMergeCheckboxes(names);
-});
+}
 
 // 来源管理
 function toggleFeeInput(cb) { cb.closest('.source-item').querySelector('.fee-input').style.display = cb.checked ? '' : 'none'; }
+// Spec 28 phase-14（task-133）：来源删除（D9 确认保护）+ 合并（D10）
+var _sourceActiveCounts = {{ source_active_counts | tojson }};
+function removeSourceTag(btn) {
+    var item = btn.closest('.source-item');
+    var name = item.dataset.name;
+    if (!name) return;
+    var cnt = _sourceActiveCounts[name] || 0;
+    if (cnt > 0 && !confirm('该来源被 ' + cnt + ' 个订单使用，删除后这些订单的来源将变为空。确认删除？')) return;
+    if (cnt > 0) {
+        // D9：确认删除的被引用来源登记清单，保存时后端置空 orders.source
+        var ch = document.getElementById('confirmed-source-deletes');
+        var arr = ch.value ? ch.value.split(',') : [];
+        if (arr.indexOf(name) === -1) { arr.push(name); ch.value = arr.join(','); }
+    }
+    item.remove();
+    renderSourceMergeCheckboxes(updateSourceHidden());
+    showToast(cnt > 0 ? '已标记删除「' + name + '」，保存设置后相关订单来源将置空'
+                     : '已移除「' + name + '」，保存设置后生效', 'success');
+}
+function updateSourceHidden() {
+    var list = [];
+    document.querySelectorAll('#panel-source .source-item').forEach(function(it) {
+        if (it.dataset.name) list.push(it.dataset.name);
+    });
+    document.getElementById('source-list-hidden').value = list.join(',');
+    return list;
+}
+function renderSourceMergeCheckboxes(names) {
+    var box = document.getElementById('source-merge-checkboxes');
+    if (!box) return;
+    box.innerHTML = '';
+    (names || []).forEach(function(n) {
+        if (!n) return;
+        var lbl = document.createElement('label');
+        lbl.style.cssText = 'display:inline-flex;align-items:center;gap:4px;font-size:0.82rem;padding:4px 8px;border:1px solid var(--color-border);border-radius:var(--radius-sm);cursor:pointer;';
+        var cb = document.createElement('input');
+        cb.type = 'checkbox'; cb.className = 'merge-src-cb'; cb.value = n;
+        cb.addEventListener('change', updateSourceMergeBtnState);
+        lbl.appendChild(cb); lbl.appendChild(document.createTextNode(' ' + n));
+        box.appendChild(lbl);
+    });
+    updateSourceMergeBtnState();
+}
+function updateSourceMergeBtnState() {
+    var btn = document.getElementById('source-merge-btn');
+    if (!btn) return;
+    var any = document.querySelectorAll('.merge-src-cb:checked').length > 0;
+    var name = (document.getElementById('source-merge-target').value || '').trim();
+    btn.disabled = !(any && name);
+}
+function doMergeSources() {
+    var oldNames = [];
+    document.querySelectorAll('.merge-src-cb:checked').forEach(function(cb) { oldNames.push(cb.value); });
+    var newName = (document.getElementById('source-merge-target').value || '').trim();
+    if (oldNames.length < 1) { showToast('请至少勾选 1 个来源', 'warning'); return; }
+    if (!newName) { showToast('请输入合并后的目标名称', 'warning'); return; }
+    if (oldNames.indexOf(newName) !== -1) { showToast('目标名称不能与被合并来源相同', 'warning'); return; }
+    if (!confirm('确定将「' + oldNames.join('、') + '」合并为「' + newName + '」？\n此操作将更新所有相关订单与费率/颜色配置，不可撤销。')) return;
+    fetch('/settings/source-merge', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({old_names: oldNames, new_name: newName})
+    }).then(function(r) { return r.json(); }).then(function(d) {
+        if (d.success) {
+            showToast(d.message, 'success');
+            setTimeout(function() { location.reload(); }, 800);
+        } else {
+            showToast('合并失败: ' + (d.error || '未知错误'), 'error');
+        }
+    }).catch(function() { showToast('网络错误', 'error'); });
+}
+// 来源合并初始化（卡 156：并入末尾 window.__pageInit）
+function initSourceMerge() {
+    var hidden = document.getElementById('source-list-hidden');
+    renderSourceMergeCheckboxes(hidden && hidden.value ? hidden.value.split(',') : []);
+    var tgt = document.getElementById('source-merge-target');
+    if (tgt) tgt.addEventListener('input', updateSourceMergeBtnState);
+}
+
+// Spec19 VIP 折扣预设（编辑模式同稿件类别：标签增删 + hidden 逗号串提交）
+function addVipPreset() {
+    var input = document.getElementById('new-vip-preset');
+    var val = parseFloat(input.value);
+    if (isNaN(val) || val <= 0 || val > 100) { showToast('折扣值须在 0~100 之间', 'error'); return; }
+    val = Math.round(val * 100) / 100;
+    var container = document.getElementById('vip-preset-tags');
+    var existing = container.querySelectorAll('.vip-preset-tag');
+    for (var i = 0; i < existing.length; i++) {
+        if (parseFloat(existing[i].dataset.value) === val) { showToast('该预设已存在', 'error'); return; }
+    }
+    var tag = document.createElement('span');
+    tag.className = 'settings-tag vip-preset-tag';
+    tag.dataset.value = val;
+    tag.innerHTML = val + '<button type="button" class="settings-tag-remove" onclick="removeVipPreset(this)" title="删除">×</button>';
+    container.appendChild(tag); input.value = ''; updateVipPresetHidden();
+}
+function removeVipPreset(btn) { btn.parentElement.remove(); updateVipPresetHidden(); }
+function updateVipPresetHidden() {
+    var vals = [];
+    document.querySelectorAll('#vip-preset-tags .vip-preset-tag').forEach(function(t) { vals.push(t.dataset.value); });
+    document.getElementById('vip-preset-hidden').value = vals.join(',');
+}
 
 // Spec12 阶段流程管理（按钮导航 + 单卡编辑）
 var _stageFlows = {{ STAGE_FLOWS | tojson }};
@@ -947,7 +1244,8 @@ function renderStageFlows() {
         btn.style.cssText = 'padding:6px 14px;border-radius:var(--radius-sm);font-size:0.85rem;font-weight:' +
             (fi === _activeFlowIdx ? '600' : '500') + ';cursor:pointer;transition:all 0.15s;' +
             (fi === _activeFlowIdx
-                ? 'background:var(--color-text);color:#fff;border:1px solid var(--color-text);'
+                // Spec 32 卡 151：active 态改 token 组合（原 var(--color-text) 底 + 白字在深色主题下不可读）
+                ? 'background:var(--color-active);color:var(--color-text);border:1px solid var(--color-border-strong);'
                 : 'background:var(--color-surface);color:var(--color-text);border:1px solid var(--color-border);');
         btn.addEventListener('click', function() { selectFlow(fi); });
         nav.appendChild(btn);
@@ -1171,9 +1469,10 @@ function saveStageFlows() {
         showToast('网络错误: ' + err.message, 'error');
     });
 }
-document.addEventListener('DOMContentLoaded', function() {
+// 阶段流程初始化（卡 156：并入末尾 window.__pageInit）
+function initStageFlows() {
     if (document.getElementById('stage-flows-editor')) renderStageFlows();
-});
+}
 function addSource() {
     var input = document.getElementById('new-source-name');
     var name = input.value.trim(); if (!name) return;
@@ -1183,10 +1482,11 @@ function addSource() {
     list.push(name); hidden.value = list.join(','); input.value = '';
     var e = escHtml(name);
     var grid = document.querySelector('#panel-source [style*="display:grid"]');
-    var div = document.createElement('div'); div.className = 'source-item';
+    var div = document.createElement('div'); div.className = 'source-item'; div.dataset.name = name;
     div.style.cssText = 'display:flex;align-items:center;gap:var(--space-sm);padding:10px 14px;border:1px solid var(--color-border);border-radius:var(--radius-sm);';
-    div.innerHTML = '<span style="flex:1;font-weight:500;min-width:60px;">'+e+'</span><label style="display:flex;align-items:center;gap:4px;font-size:0.78rem;cursor:pointer;white-space:nowrap;"><input type="checkbox" name="platform_'+e+'" value="'+e+'" onchange="toggleFeeInput(this)" style="width:15px;height:15px;cursor:pointer;"> 平台</label><input type="number" name="default_fee_'+e+'" value="5" step="0.5" min="0" max="100" class="fee-input" style="display:none;width:52px;padding:3px 5px;border:1px solid var(--color-border);border-radius:3px;font-size:0.78rem;text-align:center;"><span style="font-size:0.72rem;color:var(--color-text-tertiary);">%</span>';
+    div.innerHTML = '<span style="flex:1;font-weight:500;min-width:60px;">'+e+'</span><label style="display:flex;align-items:center;gap:4px;font-size:0.78rem;cursor:pointer;white-space:nowrap;"><input type="checkbox" name="platform_'+e+'" value="'+e+'" onchange="toggleFeeInput(this)" style="width:15px;height:15px;cursor:pointer;"> 平台</label><input type="number" name="default_fee_'+e+'" value="5" step="0.5" min="0" max="100" class="fee-input" style="display:none;width:52px;padding:3px 5px;border:1px solid var(--color-border);border-radius:3px;font-size:0.78rem;text-align:center;"><span style="font-size:0.72rem;color:var(--color-text-tertiary);">%</span><button type="button" class="settings-tag-remove source-del-btn" onclick="removeSourceTag(this)" title="删除">×</button>';
     grid.appendChild(div);
+    renderSourceMergeCheckboxes(list);
 }
 
 // 日历模式切换
@@ -1195,8 +1495,10 @@ function switchModeTab(mid) {
     activeMode = mid;
     document.querySelectorAll('.mode-tab').forEach(function(b) {
         var a = b.dataset.mode === mid;
-        b.style.background = a ? 'var(--color-text)' : 'var(--color-surface)';
-        b.style.color = a ? '#fff' : 'var(--color-text)';
+        // Spec 32 卡 151：active 态改 token 组合（原 var(--color-text) 底 + 白字在深色主题下白字浅底不可读）
+        b.style.background = a ? 'var(--color-active)' : 'var(--color-surface)';
+        b.style.color = 'var(--color-text)';
+        b.style.borderColor = a ? 'var(--color-border-strong)' : 'var(--color-border)';
     });
     document.querySelectorAll('.mode-panel').forEach(function(p) { p.style.display = p.id === 'cal-panel-' + mid ? '' : 'none'; });
     updateStripColors(mid);
@@ -1334,5 +1636,43 @@ function toggleCssTheme() {
 
     document.querySelectorAll('.tip-trigger, .inline-tip').forEach(bind);
 })();
+
+// Spec 30 D8：孤立图片清理
+function cleanupOrphanImages(btn) {
+    if (btn.disabled) return;
+    btn.disabled = true;
+    var resultEl = document.getElementById('cleanup-result');
+    resultEl.textContent = '扫描中…';
+    resultEl.style.color = 'var(--color-text-secondary)';
+    fetch('/api/maintenance/cleanup-images', { method: 'POST', headers: { 'Content-Type': 'application/json' } })
+        .then(function(r) { return r.json().then(function(d) { return { ok: r.ok, data: d }; }); })
+        .then(function(res) {
+            if (res.ok) {
+                var d = res.data;
+                if (d.deleted > 0) {
+                    resultEl.textContent = '已清理 ' + d.deleted + ' 个孤立文件，释放 ' + d.freed_mb + ' MB';
+                    resultEl.style.color = 'var(--color-success)';
+                } else {
+                    resultEl.textContent = '未发现孤立文件';
+                    resultEl.style.color = 'var(--color-text-secondary)';
+                }
+            } else {
+                resultEl.textContent = '清理失败：' + (res.data.error || '未知错误');
+                resultEl.style.color = 'var(--color-danger)';
+            }
+        })
+        .catch(function(err) {
+            resultEl.textContent = '请求失败：' + err.message;
+            resultEl.style.color = 'var(--color-danger)';
+        })
+        .then(function() { btn.disabled = false; });
+}
+
+// 卡 156：页面初始化统一入口（DOMContentLoaded → __pageInit，整页加载与 boosted 导航两路径由 app.js runPageInit 触发）
+window.__pageInit = function() {
+    initCommissionMerge();
+    initSourceMerge();
+    initStageFlows();
+};
 </script>
 {% endblock %}

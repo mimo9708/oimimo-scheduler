@@ -125,6 +125,16 @@
                     <div class="form-group"><label for="payment_status">收款</label>
                         <select name="payment_status" id="payment_status">{% for s in PAYMENT_CHOICES %}<option value="{{ s }}" {% if order and order.payment_status == s %}selected{% elif not order and s == '未收款' %}selected{% endif %}>{{ s }}</option>{% endfor %}</select>
                     </div>
+                    {# Spec 26：收款模式开关（默认整单；编辑已有分期单时初始选中分期） #}
+                    <div class="form-group"><label for="payment_mode">收款方式</label>
+                        <select name="payment_mode" id="payment_mode" onchange="togglePaymentsModeHint(this)">
+                            <option value="simple" {% if not order or (order.payment_mode or 'simple') == 'simple' %}selected{% endif %}>整单 · 按排单月计</option>
+                            <option value="installment" {% if order and order.payment_mode == 'installment' %}selected{% endif %}>分期 · 按到账月计</option>
+                        </select>
+                        <div class="payments-mode-hint" style="display:none;">
+                            {% if is_new %}分期单保存后，在订单详情页「收款流水」卡片记录每笔到账（金额/日期/备注）。{% else %}分期：按每笔到账记收入，到账记录在订单详情页「收款流水」卡片管理；已有到账记录时不可切回整单。{% endif %}
+                        </div>
+                    </div>
                 </div>
 
                 <div class="form-group" style="margin-top:var(--space-sm);">
@@ -136,6 +146,13 @@
             <!-- ═══ 右栏：财务 + 排期 ═══ -->
             <div style="padding:var(--space-md);">
                 <div class="section-label">财务</div>
+                {# Spec19：订单级折扣（公共字段，平台/直接两模式均生效；留空 = 不打折） #}
+                <div class="form-group">
+                    <label for="discount-pct">折扣 (%)</label>
+                    <input type="number" name="discount_pct" id="discount-pct" step="0.1" min="1" max="100"
+                           value="{{ order.discount_pct if order and order.discount_pct is not none else '' }}"
+                           placeholder="留空 = 不打折" oninput="calcActualReceived()">
+                </div>
                 {% set is_plat = (order.source if order else '米画师') in PLATFORM_SOURCES %}
                 <div id="finance-platform" style="{{ 'display:none;' if not is_plat else '' }}">
                     <div class="form-row">
@@ -143,11 +160,12 @@
                             <input type="number" name="deposit" id="deposit-plat" step="0.01" min="0" value="{{ order.income if order else '0' }}" oninput="calcActualReceived()" {{ 'disabled' if not is_plat }}>
                         </div>
                         <div class="form-group"><label>手续费 (%)</label>
-                            <input type="number" name="platform_fee_pct" id="platform_fee_pct" step="0.1" min="0" max="100" value="{{ '%.1f'|format(order.platform_fee_pct if order and order.platform_fee_pct else DEFAULT_FEES.get(order.source if order else '米画师', 5)) }}" oninput="calcActualReceived()" {{ 'disabled' if not is_plat }}>
+                            <input type="number" name="platform_fee_pct" id="platform_fee_pct" step="0.1" min="0" max="100" value="{{ '%.1f'|format(order.platform_fee_pct if order and order.platform_fee_pct is not none else DEFAULT_FEES.get(order.source if order else '米画师', 5)) }}" oninput="calcActualReceived()" {{ 'disabled' if not is_plat }}>
                         </div>
                     </div>
-                    <div style="margin-top:var(--space-sm);padding:10px;background:var(--color-bg);border-radius:var(--radius-sm);display:grid;grid-template-columns:repeat(3,1fr);gap:8px;font-size:0.85rem;">
+                    <div style="margin-top:var(--space-sm);padding:10px;background:var(--color-bg);border-radius:var(--radius-sm);display:grid;grid-template-columns:repeat(4,1fr);gap:8px;font-size:0.85rem;">
                         <div>收入<br><strong>¥<span id="preview-income">0</span></strong></div>
+                        <div>折后<br><strong style="color:var(--color-info);">¥<span id="preview-discounted">0</span></strong></div>
                         <div>手续费<br><strong style="color:var(--color-danger);">-¥<span id="preview-fee">0</span></strong></div>
                         <div>实收<br><strong style="color:var(--color-success);">¥<span id="preview-actual">0</span></strong></div>
                     </div>
@@ -161,8 +179,9 @@
                             <input type="number" name="balance" id="balance-direct" step="0.01" min="0" value="{{ order.balance if order else '0' }}" oninput="calcActualReceived()" {{ 'disabled' if is_plat }}>
                         </div>
                     </div>
-                    <div style="margin-top:var(--space-sm);padding:10px;background:var(--color-bg);border-radius:var(--radius-sm);display:grid;grid-template-columns:repeat(2,1fr);gap:8px;font-size:0.85rem;">
+                    <div style="margin-top:var(--space-sm);padding:10px;background:var(--color-bg);border-radius:var(--radius-sm);display:grid;grid-template-columns:repeat(3,1fr);gap:8px;font-size:0.85rem;">
                         <div>合计<br><strong>¥<span id="preview-total">0</span></strong></div>
+                        <div>折后<br><strong style="color:var(--color-info);">¥<span id="preview-discounted2">0</span></strong></div>
                         <div>实收<br><strong style="color:var(--color-success);">¥<span id="preview-actual2">0</span></strong></div>
                     </div>
                 </div>
@@ -217,10 +236,23 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="/static/datetime-toggle.js"></script>
 <script>
 var PLATFORM = {{ PLATFORM_SOURCES|list|tojson }};
 var DEFAULT_FEES = {{ DEFAULT_FEES|tojson }};
+// Spec 26：编辑已有分期单时初始化模式提示条显示态（完整页同步加载，直接调）
+(function() {
+    var pmSel = document.getElementById('payment_mode');
+    if (pmSel && typeof togglePaymentsModeHint === 'function') togglePaymentsModeHint(pmSel);
+})();
+// Spec19：客户默认折扣映射（id → discount_pct，null = 无折扣），select change 时带出
+var CUSTOMER_DISCOUNTS = { {% for c in customers %}{{ c.id }}: {{ c.discount_pct if c.discount_pct is not none else 'null' }}{{ ',' if not loop.last }}{% endfor %} };
+function applyCustomerDiscount() {
+    var cid = document.getElementById('customer_id').value;
+    var inp = document.getElementById('discount-pct');
+    var v = cid && CUSTOMER_DISCOUNTS[cid];
+    inp.value = (v !== undefined && v !== null) ? v : '';
+    calcActualReceived();
+}
 // #43：记录上次来源，只有来源真正变化时才用设置的默认费率覆盖费率框（编辑打开不覆盖快照，手改后不被强制改回）
 var lastSource = document.getElementById('source').value||'';
 function isPlatform(){ var s=document.getElementById('source').value||''; return PLATFORM.indexOf(s)!==-1; }
@@ -232,17 +264,23 @@ function toggleFinanceMode(){ var p=isPlatform(); document.getElementById('finan
     if(s!==lastSource){ if(p && DEFAULT_FEES[s]!==undefined) document.getElementById('platform_fee_pct').value=DEFAULT_FEES[s].toFixed(1); lastSource=s; }
     calcActualReceived(); }
 function calcActualReceived(){
-    if(isPlatform()){ var i=parseFloat(document.getElementById('deposit-plat').value)||0; var pct=parseFloat(document.getElementById('platform_fee_pct').value)||0; var f=Math.round(i*pct)/100; document.getElementById('preview-income').textContent=i.toFixed(2); document.getElementById('preview-fee').textContent=f.toFixed(2); document.getElementById('preview-actual').textContent=(i-f).toFixed(2); }
-    else{ var d=parseFloat(document.getElementById('deposit-direct').value)||0; var b=parseFloat(document.getElementById('balance-direct').value)||0; document.getElementById('preview-total').textContent=(d+b).toFixed(2); document.getElementById('preview-actual2').textContent=(d+b).toFixed(2); }
+    // Spec19 D4 先折后费：折后 = round(原价×折扣/100, 2) → 费按折后 → 实收 = 折后 − 费（直接来源实收 = 折后）
+    var disc=parseFloat(document.getElementById('discount-pct').value);
+    if(isPlatform()){ var i=parseFloat(document.getElementById('deposit-plat').value)||0; var discounted=(disc>0&&disc<=100)?Math.round(i*disc)/100:i; var pct=parseFloat(document.getElementById('platform_fee_pct').value)||0; var f=Math.round(discounted*pct)/100; document.getElementById('preview-income').textContent=i.toFixed(2); document.getElementById('preview-discounted').textContent=discounted.toFixed(2); document.getElementById('preview-fee').textContent=f.toFixed(2); document.getElementById('preview-actual').textContent=(discounted-f).toFixed(2); }
+    else{ var d=parseFloat(document.getElementById('deposit-direct').value)||0; var b=parseFloat(document.getElementById('balance-direct').value)||0; var total=d+b; var discounted2=(disc>0&&disc<=100)?Math.round(total*disc)/100:total; document.getElementById('preview-total').textContent=total.toFixed(2); document.getElementById('preview-discounted2').textContent=discounted2.toFixed(2); document.getElementById('preview-actual2').textContent=discounted2.toFixed(2); }
 }
 document.getElementById('source').addEventListener('input',toggleFinanceMode);
 document.getElementById('source').addEventListener('change',toggleFinanceMode);
 document.getElementById('deposit-direct').addEventListener('input',calcActualReceived);
 document.getElementById('balance-direct').addEventListener('input',calcActualReceived);
 document.getElementById('deposit-plat').addEventListener('input',calcActualReceived);
-document.addEventListener('DOMContentLoaded',calcActualReceived);
-// 初始化双模式时间选择器
-document.addEventListener('DOMContentLoaded', function() { DateTimeToggle.initAll('.date-field input[type="date"], .date-field input[type="datetime-local"]'); });
+document.getElementById('customer_id').addEventListener('change',applyCustomerDiscount);
+// 卡 156：DOMContentLoaded → __pageInit，两路径由 app.js runPageInit 统一触发
+window.__pageInit = function() {
+    calcActualReceived();
+    // 初始化双模式时间选择器
+    DateTimeToggle.initAll('.date-field input[type="date"], .date-field input[type="datetime-local"]');
+};
 
 {% if is_new %}
 // Spec12：流程预设下拉 → 同步 stage_flow + 更新阶段 select

@@ -1,0 +1,272 @@
+{# 小工具市场页（Spec 22 / 任务卡 89 T22.3）：搜索 + 分组 chip + 最近使用 + 卡片网格 #}
+{% extends "base.html" %}
+{% block title %}小工具 — oimimo scheduler{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h1 class="page-title">小工具</h1>
+    </div>
+</div>
+
+<div class="tools-toolbar">
+    <input type="search" id="tool-search" class="tool-search" placeholder="搜索工具名称或描述…" autocomplete="off">
+    <div class="tool-chips" id="tool-chips">
+        <button type="button" class="tool-chip active" data-group="">全部</button>
+        {% for g in groups %}
+        <button type="button" class="tool-chip" data-group="{{ g|e }}">{{ g|e }}</button>
+        {% endfor %}
+    </div>
+</div>
+
+{# 最近使用横条（localStorage recent_tools，D3；为空隐藏） #}
+<div class="recent-tools hidden" id="recent-tools">
+    <span class="recent-tools-label">最近使用</span>
+    <div class="recent-tools-list" id="recent-tools-list"></div>
+</div>
+
+{% if tools %}
+<div class="tool-grid" id="tool-grid">
+    {% for t in tools %}
+    <a href="{{ t.url }}" class="card tool-card" data-slug="{{ t.slug|e }}" data-name="{{ t.name|e }}"
+       data-desc="{{ t.desc|e }}" data-group="{{ t.group|e }}">
+        <div class="tool-card-icon"><i data-lucide="{{ t.icon|e }}"></i></div>
+        <div class="tool-card-body">
+            <div class="tool-card-name">{{ t.name|e }}</div>
+            <div class="tool-card-desc">{{ t.desc|e }}</div>
+        </div>
+        <span class="tool-card-group">{{ t.group|e }}</span>
+    </a>
+    {% endfor %}
+</div>
+<div class="empty-state hidden" id="tool-search-empty" style="padding:48px 16px;">
+    <div class="empty-state-icon">🔍</div>
+    <div class="empty-state-text">没有匹配的工具</div>
+</div>
+{% else %}
+<div class="empty-state" style="padding:64px 16px;">
+    <div class="empty-state-icon">🧩</div>
+    <div class="empty-state-text">还没有安装任何小工具</div>
+    <div style="font-size:0.8rem;color:var(--color-text-tertiary);margin-top:6px;max-width:420px;line-height:1.6;">
+        内置工具会随版本更新逐步加入；也欢迎自制小工具——第三方开发规范见
+        <code>.qoder/docs/tools-dev-guide.md</code>。
+    </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<style>
+    .tools-toolbar {
+        display: flex;
+        align-items: center;
+        gap: var(--space-md);
+        flex-wrap: wrap;
+        margin-bottom: var(--space-md);
+    }
+    .tool-search {
+        width: 260px;
+        padding: 8px 12px;
+        border: 1px solid var(--color-border);
+        border-radius: var(--radius-md);
+        background: var(--color-surface);
+        color: var(--color-text);
+        font-size: 0.85rem;
+    }
+    .tool-chips { display: flex; gap: 8px; flex-wrap: wrap; }
+    .tool-chip {
+        padding: 5px 14px;
+        border-radius: 999px;
+        border: 1px solid var(--color-border);
+        background: var(--color-surface);
+        color: var(--color-text-secondary);
+        font-size: 0.8rem;
+        cursor: pointer;
+        transition: all var(--transition-fast, 0.15s);
+    }
+    .tool-chip:hover { border-color: var(--color-border-strong); color: var(--color-text); }
+    .tool-chip.active {
+        background: var(--color-text);
+        color: var(--color-surface);
+        border-color: var(--color-text);
+    }
+    .recent-tools {
+        display: flex;
+        align-items: center;
+        gap: var(--space-sm);
+        padding: var(--space-sm) var(--space-md);
+        margin-bottom: var(--space-md);
+        border: 1px dashed var(--color-border);
+        border-radius: var(--radius-md);
+        background: var(--color-surface);
+        flex-wrap: wrap;
+    }
+    .recent-tools.hidden { display: none; }
+    .recent-tools-label {
+        font-size: 0.75rem;
+        color: var(--color-text-tertiary);
+        flex-shrink: 0;
+    }
+    .recent-tools-list { display: flex; gap: 8px; flex-wrap: wrap; }
+    .recent-tool-link {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        padding: 3px 10px;
+        border-radius: 999px;
+        background: var(--color-bg);
+        border: 1px solid var(--color-border);
+        color: var(--color-text-secondary);
+        font-size: 0.78rem;
+        text-decoration: none;
+    }
+    .recent-tool-link:hover { color: var(--color-text); border-color: var(--color-border-strong); }
+    .recent-tool-link svg { width: 13px; height: 13px; }
+    .tool-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+        gap: var(--space-md);
+    }
+    .tool-card {
+        display: flex;
+        align-items: center;
+        gap: var(--space-md);
+        padding: var(--space-md);
+        text-decoration: none;
+        color: inherit;
+        transition: transform var(--transition-fast, 0.15s), box-shadow var(--transition-fast, 0.15s);
+    }
+    .tool-card:hover {
+        transform: translateY(-2px);
+        box-shadow: var(--shadow-md, 0 4px 16px rgba(0,0,0,0.08));
+        text-decoration: none;
+    }
+    .tool-card.hidden { display: none; }
+    .tool-card-icon {
+        width: 42px;
+        height: 42px;
+        border-radius: var(--radius-md);
+        background: var(--color-bg);
+        border: 1px solid var(--color-border);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+        color: var(--color-text-secondary);
+    }
+    .tool-card-icon svg { width: 20px; height: 20px; }
+    .tool-card-body { min-width: 0; flex: 1; }
+    .tool-card-name {
+        font-weight: 600;
+        font-size: 0.92rem;
+        color: var(--color-text);
+        margin-bottom: 2px;
+    }
+    .tool-card-name mark, .tool-card-desc mark {
+        background: color-mix(in srgb, var(--color-warning) 45%, transparent);
+        color: inherit;
+        border-radius: 2px;
+        padding: 0 1px;
+    }
+    .tool-card-desc {
+        font-size: 0.78rem;
+        color: var(--color-text-tertiary);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .tool-card-group {
+        font-size: 0.7rem;
+        color: var(--color-text-tertiary);
+        border: 1px solid var(--color-border);
+        border-radius: 999px;
+        padding: 2px 8px;
+        flex-shrink: 0;
+    }
+</style>
+<script>
+(function() {
+    // ── 最近使用横条（D3）──
+    function renderRecentTools() {
+        var wrap = document.getElementById('recent-tools');
+        var listEl = document.getElementById('recent-tools-list');
+        if (!wrap || !listEl) return;
+        var list = [];
+        try { list = JSON.parse(localStorage.getItem('recent_tools') || '[]'); } catch (e) {}
+        if (!Array.isArray(list) || !list.length) { wrap.classList.add('hidden'); return; }
+        listEl.innerHTML = '';
+        list.forEach(function(t) {
+            if (!t || !t.slug) return;
+            var a = document.createElement('a');
+            a.className = 'recent-tool-link';
+            a.href = t.url || ('/tools/' + t.slug + '/');
+            var icon = document.createElement('i');
+            icon.setAttribute('data-lucide', t.icon || 'puzzle');
+            a.appendChild(icon);
+            a.appendChild(document.createTextNode(t.name || t.slug));
+            listEl.appendChild(a);
+        });
+        wrap.classList.remove('hidden');
+        if (window.lucide) lucide.createIcons();
+    }
+    renderRecentTools();
+
+    // ── 搜索（防抖 200ms，前端过滤 name/desc，D2）+ 分组 chip ──
+    var kw = '', group = '';
+    var timer = null;
+
+    function applyFilter() {
+        var cards = document.querySelectorAll('#tool-grid .tool-card');
+        var visible = 0;
+        cards.forEach(function(card) {
+            var name = card.dataset.name || '';
+            var desc = card.dataset.desc || '';
+            var okKw = !kw || name.toLowerCase().indexOf(kw) !== -1 || desc.toLowerCase().indexOf(kw) !== -1;
+            var okGroup = !group || card.dataset.group === group;
+            var show = okKw && okGroup;
+            card.classList.toggle('hidden', !show);
+            if (show) visible++;
+            // 命中高亮（先 textContent 再构造，禁 innerHTML 拼接）
+            highlightNode(card.querySelector('.tool-card-name'), name, kw);
+            highlightNode(card.querySelector('.tool-card-desc'), desc, kw);
+        });
+        var empty = document.getElementById('tool-search-empty');
+        if (empty) empty.classList.toggle('hidden', visible > 0 || !cards.length);
+    }
+
+    function highlightNode(el, text, keyword) {
+        if (!el) return;
+        el.textContent = '';
+        if (!keyword) { el.textContent = text; return; }
+        var lower = text.toLowerCase(), k = keyword.toLowerCase(), idx = 0, pos;
+        while ((pos = lower.indexOf(k, idx)) !== -1) {
+            el.appendChild(document.createTextNode(text.slice(idx, pos)));
+            var m = document.createElement('mark');
+            m.textContent = text.slice(pos, pos + k.length);
+            el.appendChild(m);
+            idx = pos + k.length;
+        }
+        el.appendChild(document.createTextNode(text.slice(idx)));
+    }
+
+    var searchInput = document.getElementById('tool-search');
+    if (searchInput) {
+        searchInput.addEventListener('input', function() {
+            clearTimeout(timer);
+            timer = setTimeout(function() {
+                kw = searchInput.value.trim().toLowerCase();
+                applyFilter();
+            }, 200);
+        });
+    }
+    document.querySelectorAll('#tool-chips .tool-chip').forEach(function(chip) {
+        chip.addEventListener('click', function() {
+            document.querySelectorAll('#tool-chips .tool-chip').forEach(function(c) { c.classList.remove('active'); });
+            chip.classList.add('active');
+            group = chip.dataset.group || '';
+            applyFilter();
+        });
+    });
+})();
+</script>
+{% endblock %}

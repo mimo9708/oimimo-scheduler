@@ -1,12 +1,6 @@
 {% extends "base.html" %}
 {% block title %}主页 — oimimo scheduler{% endblock %}
 
-{% block head_extra %}
-    <!-- Frappe Gantt（仅主页甘特图） -->
-    <script src="{{ url_for('static', filename='vendor/frappe-gantt.min.js') }}"></script>
-    <link rel="stylesheet" href="{{ url_for('static', filename='vendor/frappe-gantt.min.css') }}">
-{% endblock %}
-
 {% block content %}
 <div class="dashboard">
 
@@ -353,12 +347,8 @@
         } catch(e) {}
     }
 
-    // 初始化
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', initStatsRange);
-    } else {
-        initStatsRange();
-    }
+    // 初始化（卡 156：统一注册 __pageInit，整页加载与 boosted 导航均由 app.js runPageInit 触发，避免双跑）
+    window.__pageInit = initStatsRange;
 })();
 </script>
 
@@ -471,9 +461,12 @@
         if (window._bindGanttContentScroll) window._bindGanttContentScroll(ganttScroller);
     }
 
-    window.addEventListener('resize', function() {
+    // onceBind：boosted 导航重执行本脚本时防重复挂载；scroller 动态解析，跨导航有效
+    onceBind(window, 'resize', 'gantt-hscroll-resize', function() {
         var inner = document.getElementById('gantt-hscroll-inner');
-        if (inner && ganttScroller) inner.style.width = ganttScroller.scrollWidth + 'px';
+        var wrap = document.getElementById('gantt-scroll-wrap');
+        var scroller = wrap ? (wrap.querySelector('.gantt-container') || wrap) : null;
+        if (inner && scroller) inner.style.width = scroller.scrollWidth + 'px';
     });
 
     // 筛选切换

@@ -1,0 +1,33 @@
+{# 模板管理 — 完整页表单外壳（Spec 18 / 任务卡 78）：
+   提供 <form method="post"> 与页面级按钮，字段区 include templates_form.html（form_mode='page'） #}
+{% extends "base.html" %}
+{% block title %}{{ '新建模板' if is_new else '编辑模板' }} — oimimo scheduler{% endblock %}
+{% block breadcrumb_custom %}模板管理 › {{ '新建模板' if is_new else '编辑模板' }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h1 class="page-title">{{ '新建模板' if is_new else '编辑模板' }}</h1>
+    </div>
+</div>
+
+<form method="post" class="card tpl-page-form">
+    {% include 'orders/templates_form.html' %}
+    <div style="display:flex;justify-content:flex-end;gap:8px;padding-top:var(--space-sm);border-top:1px solid var(--color-border);">
+        <button type="submit" class="btn btn-primary">{{ '创建模板' if is_new else '保存修改' }}</button>
+        <a href="/templates" class="btn btn-ghost">取消</a>
+    </div>
+</form>
+{% endblock %}
+
+{% block scripts %}
+<style>
+    .tpl-page-form {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-sm);
+        padding: var(--space-lg);
+        max-width: 720px;
+    }
+</style>
+{% endblock %}

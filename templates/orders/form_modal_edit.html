@@ -113,7 +113,26 @@
         </div>
     </div>
 
+    {# Spec 26：收款模式开关（默认整单；编辑已有分期单时初始选中分期） #}
+    <div class="form-group">
+        <label>收款方式</label>
+        <select name="payment_mode" onchange="togglePaymentsModeHint(this)">
+            <option value="simple" {% if (order.payment_mode or 'simple') == 'simple' %}selected{% endif %}>整单 · 按排单月计</option>
+            <option value="installment" {% if order.payment_mode == 'installment' %}selected{% endif %}>分期 · 按到账月计</option>
+        </select>
+        <div class="payments-mode-hint" style="display:none;">
+            分期：按每笔到账记收入，到账记录在订单详情页「收款流水」卡片管理；已有到账记录时不可切回整单。
+        </div>
+    </div>
+
     <!-- 财务 -->
+    {# Spec19：订单级折扣（公共字段，平台/直接两模式均生效；留空 = 不打折） #}
+    <div class="form-group">
+        <label>折扣 (%)</label>
+        <input type="number" name="discount_pct" step="0.1" min="1" max="100"
+               value="{{ order.discount_pct if order.discount_pct is not none else '' }}"
+               placeholder="留空 = 不打折" oninput="calcModalEditActual()" id="modal-edit-discount-pct">
+    </div>
     {% set is_plat = order.source in PLATFORM_SOURCES %}
     <div id="modal-edit-finance-platform" style="{{ 'display:none;' if not is_plat else '' }}">
         <div class="form-row">
@@ -124,11 +143,12 @@
             <div class="form-group">
                 <label>手续费 (%)</label>
                 <input type="number" name="platform_fee_pct" step="0.1" min="0" max="100"
-                       value="{{ '%.1f'|format(order.platform_fee_pct if order.platform_fee_pct else DEFAULT_FEES.get(order.source, 5)) }}" oninput="calcModalEditActual()" id="modal-edit-pct" {{ 'disabled' if not is_plat }}>
+                       value="{{ '%.1f'|format(order.platform_fee_pct if order.platform_fee_pct is not none else DEFAULT_FEES.get(order.source, 5)) }}" oninput="calcModalEditActual()" id="modal-edit-pct" {{ 'disabled' if not is_plat }}>
             </div>
         </div>
         <div style="margin-top:var(--space-sm);padding:10px;background:var(--color-bg);border-radius:var(--radius-sm);font-size:0.85rem;display:flex;gap:var(--space-lg);">
             <span>收入: <strong id="modal-edit-income">¥0</strong></span>
+            <span>折后: <strong style="color:var(--color-info);">¥<span id="modal-edit-discounted">0</span></strong></span>
             <span>手续费: <strong style="color:var(--color-danger);">-¥<span id="modal-edit-fee">0</span></strong></span>
             <span>实收: <strong style="color:var(--color-success);">¥<span id="modal-edit-actual">0</span></strong></span>
         </div>
@@ -146,6 +166,7 @@
         </div>
         <div style="margin-top:var(--space-sm);padding:10px;background:var(--color-bg);border-radius:var(--radius-sm);font-size:0.85rem;display:flex;gap:var(--space-lg);">
             <span>定金+尾款: <strong id="modal-edit-total">¥0</strong></span>
+            <span>折后: <strong style="color:var(--color-info);">¥<span id="modal-edit-discounted2">0</span></strong></span>
             <span>实收: <strong style="color:var(--color-success);">¥<span id="modal-edit-actual2">0</span></strong></span>
         </div>
     </div>
@@ -203,7 +224,6 @@
     {# P16g：底部操作栏已移至表单顶部，此处不再重复 #}
 </form>
 
-<script src="/static/datetime-toggle.js"></script>
 <script>
 // 初始化双模式时间选择器（setTimeout 确保 HTMX 注入后 DOM 就绪）
 setTimeout(function() { DateTimeToggle.initAll('#center-modal-body .date-field input[type="date"], #center-modal-body .date-field input[type="datetime-local"]'); }, 0);
@@ -220,6 +240,17 @@ setTimeout(function() { DateTimeToggle.initAll('#center-modal-body .date-field i
 
 var MODAL_EDIT_PLATFORM = {{ PLATFORM_SOURCES|list|tojson }};
 var MODAL_EDIT_FEES = {{ DEFAULT_FEES|tojson }};
+// Spec19：客户默认折扣映射（id → discount_pct，null = 无折扣），select change 时带出
+var MODAL_EDIT_CUSTOMER_DISCOUNTS = { {% for c in customers %}{{ c.id }}: {{ c.discount_pct if c.discount_pct is not none else 'null' }}{{ ',' if not loop.last }}{% endfor %} };
+(function() {
+    var sel = document.querySelector('#customer-select-wrapper-modal-edit select');
+    if (!sel) return;
+    sel.addEventListener('change', function() {
+        var v = this.value && MODAL_EDIT_CUSTOMER_DISCOUNTS[this.value];
+        document.getElementById('modal-edit-discount-pct').value = (v !== undefined && v !== null) ? v : '';
+        calcModalEditActual();
+    });
+})();
 // #43：初始 lastSource = 当前来源，打开编辑不覆盖快照；只有真正切换来源才填入设置的默认费率
 var modalEditLastSource = document.querySelector('[name="source"]').value||'';
 function isModalEditPlat() { var s = document.querySelector('[name="source"]').value||''; return MODAL_EDIT_PLATFORM.indexOf(s)!==-1; }
@@ -231,12 +262,20 @@ function toggleModalEditFinance() { var p=isModalEditPlat(); document.getElement
     if(s!==modalEditLastSource){ if(p && MODAL_EDIT_FEES[s]!==undefined) document.getElementById('modal-edit-pct').value=MODAL_EDIT_FEES[s].toFixed(1); modalEditLastSource=s; }
     calcModalEditActual(); }
 function calcModalEditActual() {
-    if(isModalEditPlat()){ var income=parseFloat(document.getElementById('modal-edit-deposit-plat').value)||0; var pct=parseFloat(document.getElementById('modal-edit-pct').value)||0; var fee=Math.round(income*pct)/100; document.getElementById('modal-edit-income').textContent='¥'+income.toFixed(2); document.getElementById('modal-edit-fee').textContent=fee.toFixed(2); document.getElementById('modal-edit-actual').textContent=(income-fee).toFixed(2); }
-    else{ var d=parseFloat(document.getElementById('modal-edit-deposit-direct').value)||0; var b=parseFloat(document.getElementById('modal-edit-balance-direct').value)||0; document.getElementById('modal-edit-total').textContent='¥'+(d+b).toFixed(2); document.getElementById('modal-edit-actual2').textContent=(d+b).toFixed(2); }
+    // Spec19 D4 先折后费：折后 = round(原价×折扣/100, 2) → 费按折后 → 实收 = 折后 − 费（直接来源实收 = 折后）
+    var disc=parseFloat(document.getElementById('modal-edit-discount-pct').value);
+    if(isModalEditPlat()){ var income=parseFloat(document.getElementById('modal-edit-deposit-plat').value)||0; var discounted=(disc>0&&disc<=100)?Math.round(income*disc)/100:income; var pct=parseFloat(document.getElementById('modal-edit-pct').value)||0; var fee=Math.round(discounted*pct)/100; document.getElementById('modal-edit-income').textContent='¥'+income.toFixed(2); document.getElementById('modal-edit-discounted').textContent=discounted.toFixed(2); document.getElementById('modal-edit-fee').textContent=fee.toFixed(2); document.getElementById('modal-edit-actual').textContent=(discounted-fee).toFixed(2); }
+    else{ var d=parseFloat(document.getElementById('modal-edit-deposit-direct').value)||0; var b=parseFloat(document.getElementById('modal-edit-balance-direct').value)||0; var total=d+b; var discounted2=(disc>0&&disc<=100)?Math.round(total*disc)/100:total; document.getElementById('modal-edit-total').textContent='¥'+total.toFixed(2); document.getElementById('modal-edit-discounted2').textContent=discounted2.toFixed(2); document.getElementById('modal-edit-actual2').textContent=discounted2.toFixed(2); }
 }
 document.querySelector('[name="source"]').addEventListener('input',toggleModalEditFinance);
 document.querySelector('[name="source"]').addEventListener('change',toggleModalEditFinance);
-calcModalEditActual();
+// Spec19：延迟初始计算——片段经 HTMX 注入后函数才就绪（立即调用会命中旧页面旧函数）
+setTimeout(calcModalEditActual, 0);
+// Spec 26：编辑已有分期单时初始化模式提示条显示态
+setTimeout(function() {
+    var pmSel = document.querySelector('#order-form-modal-edit select[name="payment_mode"]');
+    if (pmSel && typeof togglePaymentsModeHint === 'function') togglePaymentsModeHint(pmSel);
+}, 0);
 
 // Spec12：流程预设切换 → 更新 stage_flow 隐藏字段 + 阶段 select
 var _MODAL_EDIT_FLOWS = {{ STAGE_FLOWS | tojson }};
