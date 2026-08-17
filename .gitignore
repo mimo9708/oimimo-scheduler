@@ -25,3 +25,7 @@ packaging/output/
 .idea/
 Thumbs.db
 .DS_Store
+
+# --- 开发版专用功能（不入库）---
+templates/stats_lab.html
+tests/test_stats_lab*.py

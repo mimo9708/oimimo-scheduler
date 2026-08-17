@@ -26,7 +26,7 @@ echo [1/4] 同步核心代码文件...
 robocopy "%SRC%" "%DST%" app.py db.py models.py image_processor.py launcher.py requirements.txt run.bat /NJH /NJS /NDL /NP
 
 echo [2/4] 同步 templates\ （镜像模式，自动删除已废弃文件）...
-robocopy "%SRC%\templates" "%DST%\templates" /MIR /NJH /NJS /NDL /NP
+robocopy "%SRC%\templates" "%DST%\templates" /MIR /XF stats_lab.html /NJH /NJS /NDL /NP
 
 echo [3/4] 同步 static\ （镜像模式，排除调试截图）...
 robocopy "%SRC%\static" "%DST%\static" /MIR /XF receipt_*.png tooltip_test.png _verify_*.png /NJH /NJS /NDL /NP
@@ -40,6 +40,7 @@ echo  同步完成。以下内容【不会】被同步（按设计排除）：
 echo    - orders.db / *.db.bak_* / oimimo.db（数据库，含隐私）
 echo    - uploads\ exports\ logs\ __pycache__\
 echo    - 开发版 CHANGELOG.md（上传版单独维护面向用户的版本记录）
+echo    - templates\stats_lab.html（开发版专用功能，不进入上传版）
 echo    - _verify_*.png / receipt_*.png 等调试截图
 echo ============================================================
 echo.
